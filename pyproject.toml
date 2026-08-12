@@ -1,0 +1,123 @@
+[build-system]
+# hatchling, not poetry-core, and the reason is the `authors` list below.
+#
+# The manifest this forked from used poetry-core, and poetry-core writes only the **first**
+# entry of `authors` and of `maintainers` into a wheel's METADATA -- as `Author:` and
+# `Maintainer:`, the singular pre-PEP-621 fields. Under it this package built a wheel crediting
+# Jan-Felix Klein and nobody else. Nico Brandt and Sören Weindel appeared nowhere in the
+# artifact, and neither did Sören as a maintainer. Moving to the PEP 621 `[project]` table did
+# not fix it; poetry-core collapses the list either way.
+#
+# That is not a cosmetic loss. #112 settled that this fork carries **no git ancestry** -- the
+# publish repo takes one commit per release -- so metadata, `LICENSE`, `README.md` and
+# `CHANGELOG.md` are the entire credit channel, and this is the half a machine reads.
+# hatchling emits `Author-email:` with every entry, and it is what `kapps_semantic_middleware`
+# already builds with.
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "kapps-triplestore-interface"
+version = "2.1.0"
+description = "SPARQL queries and atomic updates against a GraphDB triplestore, as callable Python methods."
+readme = "README.md"
+requires-python = ">=3.12,<4.0"
+# All four historical authors are retained; `maintainers` is the narrower field and is where
+# the change of hands is recorded. Standard metadata already carries exactly this distinction,
+# so neither list has to be bent to mean something it does not.
+#
+# This is not decoration. #112 settled that the fork carries **no git ancestry** -- the publish
+# repo takes one commit per release -- so these fields, `LICENSE`, `README.md` and `CHANGELOG.md`
+# are the whole of the credit. Every name here is asserted against the built wheel's METADATA
+# before a release goes out, because this channel closed once already without anyone noticing:
+# see the note above the build backend.
+authors = [
+    { name = "Jan-Felix Klein", email = "janfelixklein@ooglemail.com" },
+    { name = "Nico Brandt", email = "nico.g.brandt@gmail.com" },
+    { name = "Sören Weindel", email = "soeren.weindel@kit.edu" },
+    { name = "Etienne Hoffmann", email = "etienne.hoffmann@kit.edu" },
+]
+maintainers = [
+    { name = "Etienne Hoffmann", email = "etienne.hoffmann@kit.edu" },
+    { name = "Sören Weindel", email = "soeren.weindel@kit.edu" },
+]
+# The manifest this forked from declared no `license` field at all. The LICENSE file was there,
+# nothing pointed at it, and so the wheel shipped unlicensed as far as any tool reading metadata
+# was concerned. Both halves are asserted before a release goes out -- the declaration here, and
+# the file inside the built wheel -- so the gap cannot silently reopen.
+license = "MIT"
+license-files = ["LICENSE"]
+classifiers = [
+    # 5, not 4 and not 7: this is the 5513-line library three projects already run against a
+    # production triplestore, renamed. The version number says the same thing.
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Topic :: Database :: Front-Ends",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+# Spelled as PEP 440 ranges rather than Poetry carets, and deliberately identical to what the
+# caret form resolved to -- `git show HEAD~1:pyproject.toml` is the comparison. A dependency
+# quietly widened during a manifest migration is the kind of change nobody reviews.
+dependencies = [
+    "rdflib==7.1.3",
+    "requests>=2.32.3,<3.0.0",
+    "python-snappy>=0.7.3,<0.8.0",
+    "pydantic>=2.11.7,<3.0.0",
+    "regex>=2024.11.6,<2025.0.0",
+]
+
+[project.urls]
+# Distribution names use hyphens, repository names use underscores -- the same split as
+# `kapps-semantic-middleware` / `kapps_semantic_middleware`. PyPI normalises the one and GitHub
+# does not normalise the other, so they are simply different names for the same thing.
+Homepage = "https://github.com/circularfactory/kapps_triplestore_interface"
+Changelog = "https://github.com/circularfactory/kapps_triplestore_interface/blob/main/CHANGELOG.md"
+# The fork's origin, named in the metadata as well as in the README and the LICENSE, so a
+# reader who arrives from PyPI rather than from the repository still finds it.
+"Origin project" = "https://github.com/JaFeKl/graph_db_interface"
+
+[tool.hatch.build.targets.wheel]
+# PEP 621 has no way to say which directory is the package, and the directory name differs
+# from the distribution name by an underscore.
+packages = ["kapps_triplestore_interface"]
+
+[dependency-groups]
+dev = [
+    "black>=25.1.0,<26.0.0",
+    "pytest>=8.2.0,<9.0.0",
+    "pylint>=3.3.4,<4.0.0",
+]
+
+[tool.pylint."MESSAGES CONTROL"]
+disable = [
+  "broad-exception-caught",
+  "missing-function-docstring",
+  "missing-module-docstring",
+  "line-too-long",
+  "logging-fstring-interpolation",
+  "pointless-string-statement",
+  "protected-access",
+  "redefined-builtin",
+  "too-many-ancestors",
+  "too-many-arguments",
+  "too-many-branches",
+  "too-many-instance-attributes",
+  "too-many-lines",
+  "too-many-locals",
+  "too-many-nested-blocks",
+  "too-many-positional-arguments",
+  "too-many-public-methods",
+  "too-many-return-statements",
+  "too-many-statements",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --strict-markers"
+log_cli = "true"
+log_cli_level = "info"
