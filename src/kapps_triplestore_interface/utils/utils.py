@@ -38,13 +38,14 @@ def sanitize_triple(
 
     - A valid triple must have three entries (subject, predicate, object) defined.
     - If allow_partial is false, no entry may be None. Otherweise, at least one entry
-    must be not None.
+      must be not None.
     - Subject and predicate must be valid IRIs.
     - The object can be either an IRI or a Literal
-        - If the object is of type IRI, URIRef, or str, it will be converted to IRI.
-        - If an object of type str should be treated as a Literal, it must be
+
+      - If the object is of type IRI, URIRef, or str, it will be converted to IRI.
+      - If an object of type str should be treated as a Literal, it must be
         explicitly converted to Literal before passing.
-        - If the object is of any other type, it will be converted to a Literal.
+      - If the object is of any other type, it will be converted to a Literal.
 
     Args:
         triple (Union[TripleLike, PartialTripleLike]): The triple to validate and convert.
@@ -238,28 +239,31 @@ def convert_multi_bindings_to_python_type(
         list[Any]: List of converted Python values.
 
     Notes:
-    Bindings are expected in the format
-        [
-            { # binding 1
-                'var1': { 'type': _, 'value': _, 'datatype': _ },
-                'var2': { 'type': _, 'value': _, 'datatype': _ },
-            },
-            { # binding 2
-                'var1': { 'type': _, 'value': _, 'datatype': _ },
-                'var2': { 'type': _, 'value': _, 'datatype': _ },
-            }
-        ]
-    and returned in the format
-        [
-            { # binding 1
-                'var1': _,
-                'var2': _,
-            },
-            { # binding 2
-                'var1': _,
-                'var2': _,
-            }
-        ]
+        Bindings are expected in the format::
+
+            [
+                { # binding 1
+                    'var1': { 'type': _, 'value': _, 'datatype': _ },
+                    'var2': { 'type': _, 'value': _, 'datatype': _ },
+                },
+                { # binding 2
+                    'var1': { 'type': _, 'value': _, 'datatype': _ },
+                    'var2': { 'type': _, 'value': _, 'datatype': _ },
+                }
+            ]
+
+        and returned in the format::
+
+            [
+                { # binding 1
+                    'var1': _,
+                    'var2': _,
+                },
+                { # binding 2
+                    'var1': _,
+                    'var2': _,
+                }
+            ]
     """
     converted_bindings = []
     for binding in bindings:
@@ -356,14 +360,16 @@ def group_triples_by_bnode(triples: List[Triple]) -> List[List[Triple]]:
         List[List[Triple]]: A list of lists of related triples
 
     Example:
-        ASK {
-            { <a> <p> <b> . }      # Independent triple
-            UNION
-            { <x> <q> _:b1 .
-            _:b1 <r> <y> . }     # Connected via blank node
-            UNION
-            { <m> <n> <o> . }      # Another independent triple
-        }
+        ::
+
+            ASK {
+                { <a> <p> <b> . }      # Independent triple
+                UNION
+                { <x> <q> _:b1 .
+                  _:b1 <r> <y> . }     # Connected via blank node
+                UNION
+                { <m> <n> <o> . }      # Another independent triple
+            }
     """
     triple_groups: Dict[BNode, List[Triple]] = {}
 

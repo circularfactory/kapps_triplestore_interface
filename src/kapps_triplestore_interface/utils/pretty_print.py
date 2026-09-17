@@ -44,6 +44,7 @@ def format_result(
     Args:
         result (list[tuple[str]] | tuple[tuple[str, ...], ...] | dict[Any, Any] | list[dict]):
             One of the following structures:
+
             - tuple of tuples: tabular rows, where each inner tuple corresponds to a row
               ordered by `variables`.
             - tuple of scalars: a single-column result (when `variables` has length 1).

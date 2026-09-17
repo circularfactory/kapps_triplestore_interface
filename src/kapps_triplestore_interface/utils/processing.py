@@ -24,10 +24,13 @@ def process_bindings_select(
 
     Returns:
         tuple[tuple[Any, ...], ...] | tuple[Any, ...] | dict: When `grouping_variables` is not provided:
+
             - variables is empty or None -> () (empty tuple)
             - variables has length 1     -> (a1, a2, ...) (tuple of scalar values)
             - variables has length > 1   -> ((a1, b1, ...), (a2, b2, ...), ...) (tuple of tuples)
+
             When `grouping_variables` is provided:
+
             - Nested dict keyed by the values of `grouping_variables` (in order)
             - Each leaf is processed using the entries in `variables` (shapes as above)
 

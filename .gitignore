@@ -73,6 +73,10 @@ pylint-report.txt
 # Pytest cache
 .pytest_cache/
 
+# Sphinx build output. The documentation is built by a job and published as a site; the build
+# itself never belongs in git.
+docs/site/_build/
+
 # Left behind by tooling that is not this project's. Ignored so a checkout stays clean.
 uv.lock
 

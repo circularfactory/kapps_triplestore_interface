@@ -7,49 +7,6 @@
 This library turns SPARQL queries and updates against a running GraphDB triplestore into
 callable Python methods. Three research projects run it in production.
 
-## Origin
-
-This is a renamed fork of [`graph-db-interface`](https://github.com/JaFeKl/graph_db_interface)
-by Jan-Felix Klein.
-
-- **Origin:** [`JaFeKl/graph_db_interface`](https://github.com/JaFeKl/graph_db_interface) — MIT
-  licensed, last released as
-  [`graph-db-interface` 2.0.1](https://pypi.org/project/graph-db-interface/) on PyPI.
-- **This release:** the `dev_semantic_middleware` branch of
-  [`SAWeindel/graph_db_interface`](https://github.com/SAWeindel/graph_db_interface), which
-  carries five commits by Sören Weindel and Etienne Hoffmann that are in no released
-  `graph-db-interface`. They are listed in [CHANGELOG.md](CHANGELOG.md).
-
-The licence is MIT. Jan-Felix Klein's 2025 copyright notice is retained — a condition of the
-licence this fork relies on, not a courtesy — alongside a 2026 notice for Etienne Hoffmann and
-Sören Weindel.
-
-## Migration from graph-db-interface
-
-Three edits, and nothing else moves:
-
-1. Change your dependency from `graph-db-interface` to `kapps-triplestore-interface`.
-2. Change imports from `from graph_db_interface import ...` to `from kapps_triplestore_interface import ...`.
-3. If you catch it, change `GraphDBInterfaceError` to `TripleStoreInterfaceError`.
-
-The classes `GraphDB` and `GraphDBCredentials`, the flag `use_gdb_token` and the word
-*repository* all stay, deliberately. A GDB token is a GraphDB-only mechanism — Basic auth
-returns 401 against it, and the token comes from `rest/login` — so a backend-neutral name for
-it would hide a vendor mechanism behind a neutral word rather than abstract it. *Repository* is
-RDF4J's own term, and RDF4J is what this library speaks. And an abstraction never tested
-against a second implementation is not one: when a second backend arrives, a class is *added*,
-and `GraphDB` stays a correct name for the GraphDB implementation.
-
-### Why the first release is 2.1.0
-
-It is the same mature library under a new name, so `2.x` tells the truth about it where `0.x`
-would falsely say *I may break you*. Minor rather than patch because commit `65157c5` adds a
-feature.
-
-Not 3.0.0: semver's breaking-change rule governs upgrades *within* one distribution name, and
-no such upgrade path exists here. Nobody is bumped from `graph-db-interface` to this — they
-must edit their manifest, and that edit is the migration signal.
-
 ## Installation
 
 ```bash
@@ -106,12 +63,23 @@ Note: application/runtime credentials loaded via `GraphDBCredentials.from_env()`
 
 ## Contributing
 
-This repository is a **publish target**. It receives one commit per release, cut from a private
-development repository, so a pull request opened here has no shared history to merge into and
-cannot be merged. Please open an issue instead.
+Development happens in a private repository at KIT. This GitHub repository is a **publish
+target**. A pull request opened here cannot be merged back. Raise an issue instead, or contact the
+maintainers.
 
-Improvements that belong to the library this was forked from are better sent to its origin,
-[`JaFeKl/graph_db_interface`](https://github.com/JaFeKl/graph_db_interface).
+## Origin
+
+This is a renamed fork of
+[`JaFeKl/graph_db_interface`](https://github.com/JaFeKl/graph_db_interface) by Jan-Felix Klein,
+last released as [`graph-db-interface` 2.0.1](https://pypi.org/project/graph-db-interface/) on
+PyPI under an MIT license. It is maintained here, and changes since then are listed in
+[CHANGELOG.md](CHANGELOG.md).
+
+## Migration from graph-db-interface
+
+1. Change your dependency from `graph-db-interface` to `kapps-triplestore-interface`.
+2. Change imports from `from graph_db_interface import ...` to `from kapps_triplestore_interface import ...`.
+3. If you catch it, change `GraphDBInterfaceError` to `TripleStoreInterfaceError`.
 
 ## License
 
@@ -119,4 +87,7 @@ The package is licensed under the [MIT license](LICENSE).
 
 ## Acknowledgements
 
-This package is developed as part of the INF subproject of the [CRC 1574: Circular Factory for the Perpetual Product](https://www.sfb1574.kit.edu/english/index.php). This work is therefore supported by the Deutsche Forschungsgemeinschaft (DFG, German Research Foundation) [grant-number: SFB-1574-471687386]
+This package is developed as part of the INF subproject of the
+[CRC 1574: Circular Factory for the Perpetual Product](https://www.sfb1574.kit.edu/english/index.php).
+This work is therefore supported by the Deutsche Forschungsgemeinschaft (DFG, German Research
+Foundation) [grant-number: SFB-1574-471687386].

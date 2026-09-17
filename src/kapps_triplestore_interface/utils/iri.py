@@ -10,22 +10,24 @@ import regex as re
 
 
 class IRI(URIRef):
-    """
+    r"""
     Lightweight IRI wrapper with prefix support and validation.
 
     The stored format is a full IRI string, eg. `http://example.org#Name`.
     Prefixes are resolved from the provided dictionary or class-level registry.
 
     Valid input formats are:
+
     - Full IRIs without fragments: `http://example.org`
     - Prefixes without fragments: `prefix:`
     - Full IRI with fragment: `http://example.org#Name`
     - Prefixes with fragments: `prefix:Name`
 
     Validation supports:
+
     - `str`, `rdflib.URIRef`, `IRI` or other subclass of `str` inputs.
-        `rdflib.Literal` or non-string inputs raise `TypeError`.
-        If desired, convert to string explicitly before passing.
+      `rdflib.Literal` or non-string inputs raise `TypeError`.
+      If desired, convert to string explicitly before passing.
     - Separate base and name: `base="http://example.org", value="Name"`.
     - Angle brackets `<...>`.
     - Trailing `#`, `\` or `:` from value and base.

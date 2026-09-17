@@ -1,5 +1,35 @@
 # Changelog
 
+## 2.1.1 — 2026-09-17
+
+### Fixed
+
+- **Installing the package emitted a `SyntaxWarning`**
+  (`kapps_triplestore_interface/utils/iri.py`, `IRI`'s class docstring).
+
+  **Symptom:** the first compile of an installed checkout — so once per install, before
+  the user has written a line of their own code — printed
+
+  ```
+  site-packages/kapps_triplestore_interface/utils/iri.py:13: SyntaxWarning: invalid
+  escape sequence '\`'
+  ```
+
+  **Root cause:** the docstring is not raw and lists `` - Trailing `#`, `\` or `:` ``, so
+  `` \` `` is read as an escape sequence, and there is no such escape. Python has warned
+  about this since 3.6. The defect predates the fork and the rename: `JaFeKl/graph_db_interface`
+  carries the same line, in `utils/iri.py`.
+
+  **Fix:** the docstring is raw (`r"""`). Raw rather than a doubled backslash, because the
+  text is full of backticks and the next backslash added to it would repeat the defect.
+  The docstring's rendered text is unchanged — an invalid escape was already kept
+  literally.
+
+  A new `tests/test_compile_warnings.py` compiles every source file in the package with
+  `SyntaxWarning` raised as an error, so the next one fails CI instead of reaching PyPI.
+  It compiles rather than imports, because a warm `__pycache__` hides a compile-time
+  warning from an import.
+
 ## 2.1.0 — 2026-08-12
 
 First public release, and the first under this name.
@@ -121,8 +151,8 @@ a consumer edits their manifest, and that edit is the migration signal.
   two control tests pass on both.
 
   Found while designing anonymous-node identity in `kapps_ogm` (see
-  `JaFeKl/graph_db_interface#6`); a correctness fix for this library independently of that
-  work. Reported by the `kapps_semantic_middleware` project.
+  https://github.com/JaFeKl/graph_db_interface/issues/6); a correctness fix for this library
+  independently of that work. Reported by the `kapps_semantic_middleware` project.
 
 - **`IRI` rejected any URL containing a port** (`kapps_triplestore_interface/utils/iri.py`,
   `IRI._sanitize`).

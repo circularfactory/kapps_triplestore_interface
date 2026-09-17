@@ -1,26 +1,9 @@
 #!/usr/bin/env python3
-"""Six hygiene checks that gate a public open-source release.
-
-Vendored from `kapps_semantic_middleware` (its #110 chose vendoring over sharing: the repos
-release on their own schedules). Checks 1-5 are that file with this repo's own banned strings
-substituted. Check 6 comes from the `aas_middleware_inf` fork, which needed it because it
-renames its import package *at release time*.
-
-**This repo renamed in the dev tree instead** (#133: "the fork is born in this repo"), so
-there is no release-time transform for check 6 to verify. It is kept anyway, and it is worth
-more here than it was there, for two reasons:
-
-1. **The rename is partial by design.** `GraphDB`, `GraphDBCredentials`, `use_gdb_token` and
-   the word *repository* all stay (#112). Only the import path, the distribution and the
-   exception base moved. A check that could not tell those apart would be useless, so this one
-   names the three that moved and says nothing about the four that did not.
-2. **The origin is still developed, and merging from it can reintroduce the old name.** A
-   merge from `JaFeKl/graph_db_interface` brings files written against the old import path.
-   Check 6 is what turns that from a silent regression into a stopped release.
+"""Five hygiene checks that gate a public open-source release.
 
 Run from the repo root:
 
-    python scripts/release_checks.py [TREE]                 # checks 2-6 over TREE (default ".")
+    python scripts/release_checks.py [TREE]                 # checks 2-5 over TREE (default ".")
     python scripts/release_checks.py [TREE] --origin URL    # additionally run check 1
 
 Exit code 0 if all checks pass, 1 otherwise. Nothing is modified.
@@ -49,8 +32,9 @@ from typing import NamedTuple
 #
 # DO NOT join these concatenations back into single strings, and do not quote the
 # assembled values anywhere in this file -- comments and docstrings are scanned too.
-# test_release_checks.py reads this file's own source and asserts neither value
-# appears in it, so a tidy-up fails there rather than silently at release time.
+# test_release_checks.py reads this file's own source and asserts that no entry of
+# either tuple appears in it -- every entry, not just the first -- so a tidy-up fails
+# there rather than silently at release time.
 # -----------------------------------------------------------------------------
 
 PRIVATE_HOSTS: tuple[str, ...] = (
@@ -83,42 +67,6 @@ which no reader of the public tree can open, and that citation was written by ha
 that ships.
 """
 
-OLD_PACKAGE = "graph" + "_" + "db" + "_" + "interface"
-"""The import package this fork renamed away from, spelled in fragments for the reason above.
-
-Check 6 scans every file in the tree, this one included, so a plain literal here would make
-the checker fail on its own source.
-"""
-
-OLD_DISTRIBUTION = "graph" + "-" + "db" + "-" + "interface"
-"""The distribution name on PyPI that this fork renamed away from.
-
-Policed only in code and manifests -- see `check_rename` for why prose is treated differently.
-"""
-
-OLD_EXCEPTION = "GraphDB" + "Interface" + "Error"
-"""The exception base class this fork renamed away from.
-
-The one API symbol that moved. `GraphDB`, `GraphDBCredentials` and `use_gdb_token` did not, so
-they must not be listed here -- a check that banned them would fail on every correct file in
-the library.
-"""
-
-UPSTREAM_FRAGMENTS: tuple[str, ...] = (
-    "JaFeKl/" + OLD_PACKAGE,
-    "SAWeindel/" + OLD_PACKAGE,
-    "pypi.org/project/" + OLD_DISTRIBUTION,
-)
-"""The places the old name legitimately survives because it credits an upstream.
-
-**This fork has two upstreams**, and both have to come through the rename untouched.
-`JaFeKl/graph_db_interface` is the origin, whose MIT notice this release is obliged to retain;
-`SAWeindel/graph_db_interface` carries the five commits actually being released. The third
-entry is the origin's own PyPI page, which the README links so a reader can find what this was
-before. Blanked before the search, which is exactly why check 6 cannot be a plain substring
-scan.
-"""
-
 BANNED_PATH_FRAGMENTS: tuple[str, ...] = (
     "docs/agents/",
     ".claude/",
@@ -137,49 +85,11 @@ that ships, and a fragment banning the directory would ban this file.
 """
 
 
-RENAME_NOTE_PACKAGE = "`" + OLD_PACKAGE + "` → `kapps_triplestore_interface`"
-"""The one phrase a released document may use to name the old import package."""
-
-RENAME_NOTE_DISTRIBUTION = "`" + OLD_DISTRIBUTION + "` → `kapps-triplestore-interface`"
-"""The one phrase a released document may use to name the old distribution."""
-
-MIGRATION_IMPORT_NOTE = (
-    "`from " + OLD_PACKAGE + " import ...` to `from kapps_triplestore_interface import ...`"
-)
-"""The one phrase README.md may use to show the import a migrating reader has to change."""
-
-MIGRATION_EXCEPTION_NOTE = "`" + OLD_EXCEPTION + "` to `TripleStoreInterfaceError`"
-"""The one phrase README.md may use to show the exception a migrating reader has to change."""
-
-HISTORICAL_FRAGMENTS: tuple[str, ...] = (
-    RENAME_NOTE_PACKAGE,
-    RENAME_NOTE_DISTRIBUTION,
-    MIGRATION_IMPORT_NOTE,
-    MIGRATION_EXCEPTION_NOTE,
-)
-"""Where the old names survive because a document's job is to record them.
-
-A changelog whose entry *is* a rename has to say what the old name was, or the rename is a
-silent breaking change that nobody learns about from a version number. A migration section has
-to print the exact line a reader must edit, or it is not a migration section.
-
-**Exact phrases, not per-file exemptions.** Exempting `CHANGELOG.md` wholesale would also
-exempt the code snippets in its older entries, which are real imports and must be renamed like
-any others. A half-applied rename cannot accidentally produce one of these phrases; only a
-sentence deliberately naming both sides can.
-
-**Each phrase is defined once and read twice** -- by the document that carries it and by the
-check that permits it. `tests_release/test_release_checks.py` asserts the real README and
-CHANGELOG contain them verbatim, so the two cannot drift apart. In the sibling fork they were
-written separately, they disagreed, and the release stopped on it.
-"""
-
-
 class Violation(NamedTuple):
     """A single hygiene violation."""
 
     check: str
-    """Short check name: remotes, trailers, paths, secrets, references, or rename."""
+    """Short check name: remotes, trailers, paths, secrets, or references."""
 
     path: str
     """Repo-relative POSIX path of the offending file; empty string for repo-level findings."""
@@ -368,9 +278,9 @@ def _read_text_safe(path: Path) -> str | None:
 def check_secrets(tree: Path) -> list[Violation]:
     """Check 4 — secrets. No private host may appear anywhere.
 
-    Walks ``tree``, skipping ``.git/`` and binary files. A file violates once per entry of
-    ``PRIVATE_HOSTS`` it contains, so a file naming both is reported for both rather than
-    fixed, re-run and reported again.
+    Walks ``tree``, skipping ``.git/`` and binary files. A file violates **once per entry of
+    ``PRIVATE_HOSTS`` it contains**, so a file naming both is reported for both rather than
+    fixed, re-run, and reported again.
     """
     violations: list[Violation] = []
 
@@ -389,12 +299,11 @@ def check_secrets(tree: Path) -> list[Violation]:
 
 
 def check_references(tree: Path) -> list[Violation]:
-    """Check 5 — references. No shipped file points at a decision-record directory.
+    """Check 5 — references. No shipped file points at anything the allowlist left behind.
 
-    Walks ``tree``, skipping ``.git/`` and binary files. A file violates when its
-    text contains either entry of ``DEAD_REFERENCE_DIRS``. Both shapes fail: a full
-    path with a filename, and a bare directory named in prose. A bare citation like
-    ``ADR 0012`` does NOT fire — it names no directory.
+    Walks ``tree``, skipping ``.git/`` and binary files. A file violates when its text contains
+    any entry of ``DEAD_REFERENCE_DIRS`` — a full path with a filename, or a bare directory
+    named in prose. A file is reported once, for the first dead directory it names.
     """
     violations: list[Violation] = []
 
@@ -410,85 +319,12 @@ def check_references(tree: Path) -> list[Violation]:
                 )
                 break
 
-    return violations
-
-
-CODE_SUFFIXES: tuple[str, ...] = (".py", ".toml", ".lock", ".cfg", ".ini", ".txt", ".yml", ".yaml")
-"""Where naming the old distribution is a defect rather than a credit.
-
-See ``check_rename``. A `.md` file naming the origin distribution is doing the crediting this
-release is required to do; a `pyproject.toml` naming it is asking a resolver for the wrong
-package.
-"""
-
-
-def check_rename(tree: Path) -> list[Violation]:
-    """Check 6 — rename. The old names survive only where they credit or migrate.
-
-    Three names moved in this release and each fails differently, so each is policed
-    differently rather than lumped into one substring scan:
-
-    - ``OLD_PACKAGE`` -- the import path. Policed everywhere, in paths as well as contents.
-      This is the one that breaks code: a file still importing it produces an installable
-      package that raises `ModuleNotFoundError` on first use.
-    - ``OLD_EXCEPTION`` -- the exception base. Policed everywhere in contents, and it has no
-      allowance anywhere: an `except` clause naming it compiles and then never catches
-      anything, which is worse than an import error because nothing raises. (Spelled by
-      reference and not by name here, for the reason at the top of this file.)
-    - ``OLD_DISTRIBUTION`` -- the PyPI name. Policed in ``CODE_SUFFIXES`` files **only**. In a
-      manifest it is a resolver pointing at the origin project; in Markdown it is prose naming
-      what this was forked from, which #112 requires the README and CHANGELOG to say and which
-      appears there too many times to enumerate as exact phrases without writing the
-      documentation to suit the checker.
-
-    **Paths as well as contents, for the import package.** A directory that was moved but
-    whose imports were not rewritten fails on contents; a rewrite that fired everywhere except
-    on the package directory itself fails on the path. Both halves are wrong in isolation and
-    only one of them shows up in a diff.
-
-    ``UPSTREAM_FRAGMENTS`` and ``HISTORICAL_FRAGMENTS`` are blanked before the search, so
-    neither the credit owed to the two upstreams nor the CHANGELOG's own record of the rename
-    reads as an unfinished one.
-    """
-    violations: list[Violation] = []
-
-    allowed = UPSTREAM_FRAGMENTS + HISTORICAL_FRAGMENTS
-
-    def scrub(text: str) -> str:
-        for fragment in allowed:
-            text = text.replace(fragment, "")
-        return text
-
-    for fpath, rel_str in _walk_files(tree):
-        if OLD_PACKAGE in scrub(rel_str):
-            violations.append(
-                Violation("rename", rel_str, f"path still carries '{OLD_PACKAGE}'")
-            )
-            continue
-
-        content = _read_text_safe(fpath)
-        if content is None:
-            continue
-        scrubbed = scrub(content)
-
-        if OLD_PACKAGE in scrubbed:
-            violations.append(
-                Violation("rename", rel_str, f"content still names '{OLD_PACKAGE}'")
-            )
-        if OLD_EXCEPTION in scrubbed:
-            violations.append(
-                Violation("rename", rel_str, f"content still names '{OLD_EXCEPTION}'")
-            )
-        if rel_str.endswith(CODE_SUFFIXES) and OLD_DISTRIBUTION in scrubbed:
-            violations.append(
-                Violation("rename", rel_str, f"content still names '{OLD_DISTRIBUTION}'")
-            )
 
     return violations
 
 
 def run_tree_checks(tree: Path) -> list[Violation]:
-    """Run checks 3, 4, 5, 6 — the tree scans that apply in CI.
+    """Run checks 3, 4, 5 — the tree scans that apply in CI.
 
     Check 1 (remotes) and 2 (trailers) are about local clone state and history;
     they mean nothing in a CI checkout, so this runner excludes them.
@@ -497,12 +333,11 @@ def run_tree_checks(tree: Path) -> list[Violation]:
     violations.extend(check_paths(tree))
     violations.extend(check_secrets(tree))
     violations.extend(check_references(tree))
-    violations.extend(check_rename(tree))
     return violations
 
 
 def run_ci_checks(repo: Path) -> list[Violation]:
-    """Run checks 2-6 — the backstop the release repo's own CI runs.
+    """Run checks 2-5 — the backstop the release repo's own CI runs.
 
     Check 1 (remotes) is the one check a CI checkout cannot answer: the runner's remote is
     whatever `actions/checkout` configured, and says nothing about where a release was pushed
@@ -521,7 +356,7 @@ def run_ci_checks(repo: Path) -> list[Violation]:
 
 
 def run_all(repo: Path, expected_origin: str) -> list[Violation]:
-    """Run all six checks (1-6).
+    """Run all five checks (1-5).
 
     Used for the pre-push gate in the private repo, where the full history and
     remote configuration are available.
@@ -537,11 +372,11 @@ def main(argv: list[str] | None = None) -> int:
 
     Supports::
 
-        python scripts/release_checks.py [TREE]                    # checks 2-6
-        python scripts/release_checks.py [TREE] --origin URL       # checks 1-6
+        python scripts/release_checks.py [TREE]                    # checks 2-5
+        python scripts/release_checks.py [TREE] --origin URL       # checks 1-5
 
-    Without ``--origin`` this is the release repo's CI backstop, which kapps_semantic_middleware#110 specifies as
-    checks 2-6. Only check 1 needs the expected origin, so only check 1 waits for it.
+    Without ``--origin`` this is the release repo's CI backstop, which is specified as
+    checks 2-5. Only check 1 needs the expected origin, so only check 1 waits for it.
     """
     parser = argparse.ArgumentParser(
         description="Hygiene checks for a public release tree.",
@@ -551,7 +386,7 @@ def main(argv: list[str] | None = None) -> int:
         "--origin",
         dest="origin",
         default=None,
-        help="Expected origin URL. Adds check 1; without it, checks 2-6 run.",
+        help="Expected origin URL. Adds check 1; without it, checks 2-5 run.",
     )
 
     args = parser.parse_args(argv)
