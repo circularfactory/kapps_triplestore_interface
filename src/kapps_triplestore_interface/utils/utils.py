@@ -214,16 +214,22 @@ def from_xsd_literal(
     datatype: str,
 ):
     """
-    Convert an XSD-typed string value to a Python value.
+    Convert a typed string value to a Python value.
+
+    Datatypes outside the XSD set are returned as their lexical form. RDF allows any IRI as
+    a datatype, and custom ones are how domain values are carried — distribution-valued
+    literals, GeoSPARQL WKT, and so on. Raising on them would make any result set that
+    contains one unreadable, even though writing such a literal already works.
 
     Args:
         value (str): The lexical form of the literal.
-        datatype (str): The XSD datatype IRI.
+        datatype (str): The datatype IRI.
 
     Returns:
-        Any: The converted Python value.
+        Any: The converted Python value, or the unchanged lexical form for an
+            unrecognized datatype.
     """
-    return XSDToPythonMapper[URIRef(datatype)](value)
+    return XSDToPythonMapper.get(URIRef(datatype), str)(value)
 
 
 def convert_multi_bindings_to_python_type(
