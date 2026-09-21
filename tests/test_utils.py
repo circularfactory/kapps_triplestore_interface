@@ -344,3 +344,35 @@ GRAPH {named_graph_str} {{
 """
     result = utils.encapsulate_named_graph(named_graph, content)
     assert expected_result.strip() == result.strip()
+
+def test_from_xsd_literal_keeps_unknown_datatypes():
+    # RDF allows any IRI as a datatype. An unrecognized one must come back as its lexical
+    # form rather than raising, so a result set containing a custom literal stays readable.
+    gmm = '{"n_components":1,"dimensions":1,"weights":[1.0],"means":[[25.0]]}'
+    assert (
+        utils.from_xsd_literal(gmm, "http://example.org/ontology/uncertainty#gmmLiteral")
+        == gmm
+    )
+    assert (
+        utils.from_xsd_literal(
+            "POINT(8.41 49.01)", "http://www.opengis.net/ont/geosparql#wktLiteral"
+        )
+        == "POINT(8.41 49.01)"
+    )
+
+
+def test_convert_binding_to_python_type_with_unknown_datatype():
+    binding = {
+        "type": "literal",
+        "value": "POINT(8.41 49.01)",
+        "datatype": "http://www.opengis.net/ont/geosparql#wktLiteral",
+    }
+    assert utils.convert_binding_to_python_type(binding) == "POINT(8.41 49.01)"
+
+    # XSD datatypes must keep converting as before.
+    binding = {
+        "type": "literal",
+        "value": "0.62",
+        "datatype": "http://www.w3.org/2001/XMLSchema#double",
+    }
+    assert utils.convert_binding_to_python_type(binding) == 0.62
