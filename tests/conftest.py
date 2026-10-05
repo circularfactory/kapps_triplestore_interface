@@ -106,7 +106,7 @@ def db() -> GraphDB:
         pytest.fail(
             f"refusing to clear graphs in repository "
             f"{os.getenv('GRAPHDB_TEST_REPOSITORY')!r} on {url!r}.\n"
-            "This fixture wipes the default context and two named graphs at session start, and "
+            "This fixture wipes the default context and three named graphs at session start, and "
             "that host is neither loopback nor a container alias, so nothing here can tell that "
             "it is disposable.\n"
             "Point GRAPHDB_URL at a local GraphDB or a service alias, or set "
@@ -123,10 +123,13 @@ def db() -> GraphDB:
 
     db = GraphDB(credentials=credentials)
 
+    # `test_unknown_datatypes.py` writes into the third graph. A run that stops between a case's
+    # setup and its teardown leaves a value there, and the next run would read two.
     for graph in [
         None,
         "http://example.org/named_graph",
         "http://example.org/local_named_graph",
+        "http://example.org/unknown_datatypes_graph",
     ]:
         db.clear_graph(graph)
 

@@ -344,3 +344,96 @@ GRAPH {named_graph_str} {{
 """
     result = utils.encapsulate_named_graph(named_graph, content)
     assert expected_result.strip() == result.strip()
+
+
+# A datatype the map has no converter for: RDF allows any IRI, and the map does not cover
+# all of XSD either. Reading one must not raise, and must not lose the datatype.
+GMM_LITERAL = "http://example.org/ontology/uncertainty#gmmLiteral"
+WKT_LITERAL = "http://www.opengis.net/ont/geosparql#wktLiteral"
+GMM_VALUE = '{"n_components":1,"dimensions":1,"weights":[1.0],"means":[[25.0]]}'
+
+
+@pytest.mark.parametrize(
+    "value, datatype",
+    [
+        (GMM_VALUE, GMM_LITERAL),
+        ("POINT(8.41 49.01)", WKT_LITERAL),
+        ("2026-09-30T12:00:00Z", "http://www.w3.org/2001/XMLSchema#dateTimeStamp"),
+    ],
+    ids=["custom", "geosparql", "xsd-not-in-the-map"],
+)
+def test_from_xsd_literal_keeps_an_unknown_datatype(value, datatype):
+    converted = utils.from_xsd_literal(value, datatype)
+    assert converted == Literal(value, datatype=datatype)
+    assert isinstance(converted, str)
+    assert str(converted) == value
+
+
+def test_convert_binding_to_python_type_with_an_unknown_datatype():
+    binding = {"type": "literal", "value": "POINT(8.41 49.01)", "datatype": WKT_LITERAL}
+    assert utils.convert_binding_to_python_type(binding) == Literal(
+        "POINT(8.41 49.01)", datatype=WKT_LITERAL
+    )
+
+    # One such literal must leave the rest of its result set readable.
+    bindings = [
+        {"geometry": binding},
+        {
+            "geometry": {
+                "type": "literal",
+                "value": "0.62",
+                "datatype": "http://www.w3.org/2001/XMLSchema#double",
+            }
+        },
+    ]
+    converted = utils.convert_multi_bindings_to_python_type(bindings)
+    assert converted[1]["geometry"] == 0.62
+
+
+def test_a_literal_with_an_unknown_datatype_writes_back_unchanged():
+    # A plain str in the object position is read as an IRI, so a str fallback would raise
+    # here. The Literal keeps its datatype through sanitize_triple.
+    value = utils.from_xsd_literal(GMM_VALUE, GMM_LITERAL)
+    _, _, obj = utils.sanitize_triple(
+        ("http://example.org#subject", "http://example.org#predicate", value)
+    )
+    assert obj.n3() == Literal(GMM_VALUE, datatype=GMM_LITERAL).n3()
+
+
+def test_group_triples_by_bnode_joins_two_groups():
+    """One triple that touches the blank nodes of two existing groups joins them into one.
+
+    The shape of an OWL list: the `rdf:first` cell and the restriction it points at are
+    two groups until the triple that links them arrives.
+    """
+    a, b = BNode("a"), BNode("b")
+    s, p = IRI("http://example.org#s"), IRI("http://example.org#p")
+    first = (s, p, a)
+    second = (b, p, IRI("http://example.org#o"))
+    link = (a, p, b)
+    independent = (s, p, IRI("http://example.org#other"))
+
+    groups = utils.group_triples_by_bnode([first, second, independent, link])
+
+    assert groups == [[first, second, link], [independent]]
+
+
+def test_group_triples_by_bnode_joins_every_member():
+    """Every member of an absorbed group follows it, not only the joining triple's nodes."""
+    a, b, c = BNode("a"), BNode("b"), BNode("c")
+    p = IRI("http://example.org#p")
+    triples = [(a, p, c), (b, p, Literal(1)), (a, p, b), (c, p, Literal(2))]
+
+    groups = utils.group_triples_by_bnode(triples)
+
+    assert len(groups) == 1
+    assert sorted(groups[0], key=str) == sorted(triples, key=str)
+
+
+def test_group_triples_by_bnode_keeps_separate_groups_apart():
+    a, b = BNode("a"), BNode("b")
+    p = IRI("http://example.org#p")
+
+    groups = utils.group_triples_by_bnode([(a, p, Literal(1)), (b, p, Literal(2))])
+
+    assert groups == [[(a, p, Literal(1))], [(b, p, Literal(2))]]

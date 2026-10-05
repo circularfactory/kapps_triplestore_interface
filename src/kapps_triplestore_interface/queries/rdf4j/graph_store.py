@@ -1,6 +1,10 @@
 from requests import Response
 from typing import TYPE_CHECKING, Optional
 from rdflib import Graph
+from kapps_triplestore_interface.exceptions import (
+    GraphDbException,
+    ShaclValidationError,
+)
 from kapps_triplestore_interface.utils.iri import IRI
 from kapps_triplestore_interface.utils.types import GraphNameLike
 
@@ -126,14 +130,22 @@ def clear_graph(
     Deletes the specified named graph from the triplestore; when `graph_iri` is
     None, clears the default graph.
 
+    A store with SHACL validation can refuse a clear, because the remaining data would
+    violate a shape. It then clears nothing.
+
     Args:
         graph_iri (Optional[GraphNameLike]): IRI of the named graph to clear;
             default graph when None.
 
     Returns:
-        bool: True on success (HTTP 204), False otherwise.
+        bool: True on success (HTTP 204). Any other answer raises.
 
     Raises:
+        ShaclValidationError: If the store refused the clear because the remaining data
+            would violate a SHACL shape. Its `report` is the store's validation report. The
+            refusal is logged only at DEBUG; the caller decides how loud it is.
+        GraphDbException: If the store answers with any other status than 204. It is
+            logged at ERROR. The message names the repository and the graph.
         requests.exceptions.RequestException: If the underlying HTTP request fails.
     """
     graph_iri_str = str(IRI(graph_iri)) if graph_iri else None
@@ -149,12 +161,23 @@ def clear_graph(
     )
 
     if response.status_code != 204:
-        self.logger.warning(
-            f"Failed to clear named graph: {response.status_code} - {response.text}"
-            if graph_iri_str
-            else f"Failed to clear default graph: {response.status_code} - {response.text}"
+        # `query()`'s mapping of an error answer to a type. Imported here, not at the top:
+        # `graph_db` imports this module while it defines `GraphDB`.
+        from kapps_triplestore_interface.graph_db import (  # pylint: disable=import-outside-toplevel
+            _carries_validation_report,
         )
-        return False
+
+        target = f"graph <{graph_iri_str}>" if graph_iri_str else "the default graph"
+        message = (
+            f"Failed to clear {target} in repository '{self._repository}'"
+            f" ({response.status_code}) - {response.text}"
+        )
+        if _carries_validation_report(response):
+            # As in `query()`: the caller decides how loud a refusal is.
+            self.logger.debug(message)
+            raise ShaclValidationError(message, report=response.text)
+        self.logger.error(message)
+        raise GraphDbException(message)
 
     self.logger.debug(
         f"Named graph {graph_iri_str} cleared successfully!"

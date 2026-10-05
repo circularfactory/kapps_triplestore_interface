@@ -1,6 +1,6 @@
 # API reference
 
-Generated from the source by `sphinx.ext.autodoc`, one page per public module (16 modules).
+Generated from the source by `sphinx.ext.autodoc`, one page per public module (17 modules).
 Members without a docstring are listed too, with their signatures.
 
 :::{note}
@@ -21,6 +21,7 @@ sparql_query
 :caption: Queries
 :maxdepth: 1
 
+queries/checked_write
 queries/named_graph
 queries/ontology_helpers
 queries/rdf4j/graph_store

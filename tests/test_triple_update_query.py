@@ -31,8 +31,13 @@ def stub_db() -> GraphDB:
     db._repository = "stub"
     db._blank_ids = set()
     db.queries = []
-    db.query = lambda query, update=False, **kwargs: (db.queries.append(query), True)[1]
-    db.all_triple_exists = lambda triples, named_graph=None: True
+
+    def query(query, update=False, **kwargs):
+        db.queries.append(query)
+        # The checked write asks for its receipt; the store found it.
+        return True if update else {"boolean": True}
+
+    db.query = query
     return db
 
 
@@ -42,7 +47,7 @@ def _variables(block: str) -> list[str]:
 
 def _split_blocks(query: str) -> dict[str, str]:
     match = re.search(
-        r"DELETE \{(?P<delete>.*?)\}\s*INSERT \{(?P<insert>.*?)\}\s*WHERE \{(?P<where>.*?)\}\s*$",
+        r"DELETE \{(?P<delete>.*?)\}\s*INSERT \{(?P<insert>.*?)\}\s*(?:USING <[^>]*>\s*)?WHERE \{(?P<where>.*?)\}\s*$",
         query,
         re.DOTALL,
     )
@@ -63,7 +68,7 @@ def test_blank_node_on_both_sides_is_one_variable(stub_db: GraphDB):
         old_triples=[(SUB, PRED, node), (node, VALUE, Literal(12.1))],
         new_triples=[(SUB, PRED, node), (node, VALUE, Literal(1.4))],
     )
-    blocks = _split_blocks(stub_db.queries[-1])
+    blocks = _split_blocks(stub_db.queries[0])
 
     delete_vars = set(_variables(blocks["delete"]))
     insert_vars = set(_variables(blocks["insert"]))
@@ -80,7 +85,7 @@ def test_blank_node_only_in_new_triples_is_minted(stub_db: GraphDB):
         old_triples=[(SUB, PRED, Literal("gone"))],
         new_triples=[(SUB, PRED, fresh), (fresh, VALUE, Literal(1.4))],
     )
-    blocks = _split_blocks(stub_db.queries[-1])
+    blocks = _split_blocks(stub_db.queries[0])
 
     insert_vars = set(_variables(blocks["insert"]))
     assert len(insert_vars) == 1
@@ -101,7 +106,7 @@ def test_mixed_retained_and_new_blank_nodes(stub_db: GraphDB):
             (fresh, VALUE, Literal(9.9)),
         ],
     )
-    blocks = _split_blocks(stub_db.queries[-1])
+    blocks = _split_blocks(stub_db.queries[0])
 
     assert blocks["where"].count("BIND(BNODE()") == 1
     retained_var = set(_variables(blocks["delete"]))
@@ -116,7 +121,7 @@ def test_no_blank_nodes_is_unchanged(stub_db: GraphDB):
         old_triples=[(SUB, VALUE, Literal(12.1))],
         new_triples=[(SUB, VALUE, Literal(1.4))],
     )
-    query = stub_db.queries[-1]
+    query = stub_db.queries[0]
 
     assert "?" not in query
     assert "BIND(BNODE()" not in query

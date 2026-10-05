@@ -214,16 +214,27 @@ def from_xsd_literal(
     datatype: str,
 ):
     """
-    Convert an XSD-typed string value to a Python value.
+    Convert a typed string value to a Python value.
+
+    A datatype that `XSDToPythonMapper` has no converter for gives back an `rdflib.Literal`
+    that keeps the datatype, as rdflib's own `Literal.toPython()` does. RDF allows any IRI as
+    a datatype, for example GeoSPARQL's `wktLiteral`, and the map does not cover all of XSD
+    either. The `Literal` is a `str`, and a write with it stores the same typed literal.
 
     Args:
         value (str): The lexical form of the literal.
-        datatype (str): The XSD datatype IRI.
+        datatype (str): The datatype IRI.
 
     Returns:
-        Any: The converted Python value.
+        Any: The converted Python value, or an `rdflib.Literal` when the datatype has
+            no converter.
     """
-    return XSDToPythonMapper[URIRef(datatype)](value)
+    # URIRef, not IRI: a datatype IRI can use any scheme, and IRI accepts only http(s) IRIs
+    # and registered prefixes. It would raise on a `urn:` datatype that rdflib accepts.
+    converter = XSDToPythonMapper.get(URIRef(datatype))
+    if converter is None:
+        return Literal(value, datatype=datatype)
+    return converter(value)
 
 
 def convert_multi_bindings_to_python_type(
@@ -288,6 +299,8 @@ def convert_binding_to_python_type(
 
     Returns:
         Any: A Python value converted from the binding, or the raw string when not typed.
+            A literal whose datatype has no converter comes back as an `rdflib.Literal`.
+            See `from_xsd_literal`.
     """
     type = result_binding.get("type")
     if type == "literal" and "datatype" in result_binding:
@@ -371,37 +384,33 @@ def group_triples_by_bnode(triples: List[Triple]) -> List[List[Triple]]:
                 { <m> <n> <o> . }      # Another independent triple
             }
     """
-    triple_groups: Dict[BNode, List[Triple]] = {}
+    # Each group is its set of blank nodes and its triples, in order of first appearance. A
+    # triple that touches the blank nodes of several groups joins them into one: the first,
+    # which absorbs the others whole.
+    groups: List[tuple[set, List[Triple]]] = []
+    seen_independent = set()
 
     for triple in triples:
-        # Extract blank nodes in the triple
-        bnodes = set()
-        for elem in triple:
-            if isinstance(elem, BNode):
-                bnodes.add(elem)
+        bnodes = {elem for elem in triple if isinstance(elem, BNode)}
 
         if not bnodes:
-            # No blank nodes - independent triple
-            # Use triple itself as hashable key
-            triple_groups[triple] = [triple]
+            # No blank nodes - independent triple, once
+            if triple not in seen_independent:
+                seen_independent.add(triple)
+                groups.append((set(), [triple]))
             continue
 
-        containing_sets = [
-            triple_groups[bnode] for bnode in bnodes if bnode in triple_groups
-        ]
-        if not containing_sets:
-            # Create new group
-            containing_set = []
-        else:
-            # Existing groups - merge if multiple
-            containing_set = containing_sets[0]
-            for set_to_merge in containing_sets[1:]:
-                containing_set |= set_to_merge
+        joined = [group for group in groups if group[0] & bnodes]
+        if not joined:
+            groups.append((bnodes, [triple]))
+            continue
 
-        # Add triple to the containing group
-        containing_set.append(triple)
-        # Update bnode to group mapping - overwrite to merged group if needed
-        for bnode in bnodes:
-            triple_groups[bnode] = containing_set
+        target_bnodes, target_triples = joined[0]
+        for other in joined[1:]:
+            target_bnodes |= other[0]
+            target_triples.extend(other[1])
+            groups[:] = [group for group in groups if group is not other]
+        target_bnodes |= bnodes
+        target_triples.append(triple)
 
-    return list(triple_groups.values())
+    return [group_triples for _, group_triples in groups]

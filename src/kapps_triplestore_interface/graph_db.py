@@ -7,6 +7,7 @@ import requests
 import logging
 import threading
 from requests import Response
+from urllib3.exceptions import ProtocolError
 from kapps_triplestore_interface.utils.graph_db_credentials import GraphDBCredentials
 from kapps_triplestore_interface.utils.iri import IRI
 from kapps_triplestore_interface.utils.types import GraphNameLike, GraphName
@@ -15,8 +16,30 @@ from kapps_triplestore_interface.exceptions import (
     InvalidRepositoryError,
     AuthenticationError,
     GraphDbException,
+    ShaclValidationError,
 )
 from kapps_triplestore_interface.utils.utils import convert_multi_bindings_to_python_type
+
+# The store states in the media type that its answer is a SHACL validation report. The RDF
+# format follows after a `+`: GraphDB 10.8.1 answers a refused update with HTTP 500 and
+# `application/shacl-validation-report+n-quads`. The body is not inspected: the error text
+# of a malformed update quotes values from the update, and an update can name `sh:` terms.
+SHACL_VALIDATION_REPORT_MEDIA_TYPE = "application/shacl-validation-report"
+
+
+def _carries_validation_report(response: Response) -> bool:
+    media_type = response.headers.get("Content-Type", "").split(";", 1)[0]
+    return media_type.strip().lower().startswith(SHACL_VALIDATION_REPORT_MEDIA_TYPE)
+
+
+def _connection_aborted(error: requests.ConnectionError) -> bool:
+    """Whether the store closed the connection after the request went out on it.
+
+    requests wraps urllib3's `ProtocolError('Connection aborted.', ...)`, for example with
+    `RemoteDisconnected` or `ConnectionResetError`. A store that cannot be reached at all
+    gives a different cause, which is not retried.
+    """
+    return bool(error.args) and isinstance(error.args[0], ProtocolError)
 
 
 class GraphDB:
@@ -343,7 +366,15 @@ class GraphDB:
         Raises:
             TypeError: If the `query` parameter is neither a `SPARQLQuery` nor a string.
             InvalidQueryError: If the SPARQL query is malformed.
-            GraphDbException: If the HTTP request succeeds but the GraphDB API returns an error status.
+            ShaclValidationError: If the store refused the update because the data would
+                violate a SHACL shape. Its `report` is the store's validation report. The
+                refusal is logged only at DEBUG; the caller decides how loud it is.
+            GraphDbException: If the HTTP request succeeds but the GraphDB API returns any
+                other error status.
+            requests.ConnectionError: If the request gets no answer. When the store closed the
+                connection without an answer, a read (`update=False`) is sent once more, on a
+                fresh connection, and raises only if that fails as well. An update is never
+                sent again.
         """
         if isinstance(query, SPARQLQuery):
             query = query.to_string()
@@ -359,16 +390,30 @@ class GraphDB:
         if update:
             endpoint += "/statements"
             headers["Content-Type"] = "application/sparql-update"
-        response = self._make_request("post", endpoint, headers=headers, data=query)
+        try:
+            response = self._make_request("post", endpoint, headers=headers, data=query)
+        except requests.ConnectionError as error:
+            # The store closes a keep-alive connection that has been idle for a while (a remote
+            # GraphDB measured: after 5 s). A request that leaves on it at that moment gets no
+            # answer. A read is sent again once, on a fresh connection. A write is never sent
+            # again, because the store may have applied it, and a second one could apply it twice.
+            if update or not _connection_aborted(error):
+                raise
+            self.logger.info(
+                f"The store closed the connection without an answer ({error}). Sending the read again on a fresh connection."
+            )
+            self._session.close()
+            response = self._make_request("post", endpoint, headers=headers, data=query)
 
         if not response.ok:
-            status_code = response.status_code
-            self.logger.error(
-                f"Error while querying GraphDB ({status_code}) - {response.text}"
-            )
-            raise GraphDbException(
-                f"Error while querying GraphDB ({status_code}) - {response.text}"
-            )
+            message = f"Error while querying GraphDB ({response.status_code}) - {response.text}"
+            if _carries_validation_report(response):
+                # A refusal is an outcome the caller expects and catches, so the caller
+                # decides how loud it is. The report travels in the error.
+                self.logger.debug(message)
+                raise ShaclValidationError(message, report=response.text)
+            self.logger.error(message)
+            raise GraphDbException(message)
 
         self.logger.debug(
             f'Query\n"""\n{query}\n"""\nReturned\n{"Update successful (200)" if update else response.json()}'

@@ -2,7 +2,7 @@ import itertools
 import pytest
 from rdflib import Literal, XSD
 from kapps_triplestore_interface import GraphDB
-from kapps_triplestore_interface.exceptions import InvalidInputError
+from kapps_triplestore_interface.exceptions import InvalidInputError, PreconditionFailedError
 from kapps_triplestore_interface.utils import utils
 from kapps_triplestore_interface.utils.iri import IRI
 
@@ -53,12 +53,16 @@ def test_add_and_delete_triple(db: GraphDB, named_graph: str):
     )
     assert result is True
 
-    # try to delete the triple again
-    result = db.triple_delete(
-        (SUB_1, PRED_1, OBJ_1),
-        named_graph=named_graph,
+    # try to delete the triple again: the precondition is false, and the write raises
+    with pytest.raises(PreconditionFailedError) as refused:
+        db.triple_delete(
+            (SUB_1, PRED_1, OBJ_1),
+            named_graph=named_graph,
+        )
+    assert refused.value.triples == [utils.sanitize_triple((SUB_1, PRED_1, OBJ_1))]
+    assert refused.value.named_graph == (
+        IRI(named_graph) if named_graph else db.named_graph
     )
-    assert result is False
 
     # if we dont check for existence it shoud return True
     result = db.triple_delete(
@@ -90,15 +94,16 @@ def test_add_and_delete_multiple_triples(db: GraphDB, named_graph: str):
     )
     assert result is True
 
-    # try to delete the triples again
-    result = db.triples_delete(
-        [
-            (SUB_1, PRED_1, OBJ_1),
-            (SUB_2, PRED_2, OBJ_2),
-        ],
-        named_graph=named_graph,
-    )
-    assert result is False
+    # try to delete the triples again: the precondition is false, and the write raises
+    with pytest.raises(PreconditionFailedError) as refused:
+        db.triples_delete(
+            [
+                (SUB_1, PRED_1, OBJ_1),
+                (SUB_2, PRED_2, OBJ_2),
+            ],
+            named_graph=named_graph,
+        )
+    assert len(refused.value.triples) == 2
 
     # if we dont check for existence it shoud return True
     result = db.triples_delete(

@@ -7,6 +7,7 @@ from .utils.processing import process_bindings_select
 from .utils.pretty_print import format_result
 from .kafka.kafka_manager import KafkaManager
 from .utils.xsd_typemap import XSDToPythonTypes, XSDToPythonMapper
+from .exceptions import ShaclValidationError, PreconditionFailedError
 
 __all__ = [
     "GraphDB",
@@ -19,4 +20,6 @@ __all__ = [
     "KafkaManager",
     "XSDToPythonTypes",
     "XSDToPythonMapper",
+    "ShaclValidationError",
+    "PreconditionFailedError",
 ]

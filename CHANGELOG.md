@@ -1,5 +1,169 @@
 # Changelog
 
+## 2.2.0 — 2026-10-05
+
+### Added
+
+- **`ShaclValidationError`** (`kapps_triplestore_interface/exceptions.py`, also exported from
+  the package). `GraphDB.query` raises it when the store refuses an update because the data
+  would violate a SHACL shape. The store then commits nothing of the update. The error's
+  `.report` is the store's validation report, verbatim: the body of its answer. The report is
+  not parsed.
+
+  So a caller can tell a refusal from every other failure by its type. Catch
+  `ShaclValidationError` for a refusal, and `TripleStoreInterfaceError` for any error from this
+  package. `triple_add`, `triple_delete`, `triple_update`, `triples_add`, `triples_delete` and
+  `triples_update` send their update through `GraphDB.query`, so they raise it too.
+
+  The store marks its answer as a report in the media type, and the client reads only that:
+  GraphDB 10.8.1 answers with HTTP 500 and `application/shacl-validation-report+n-quads`.
+  Every other error status raises the same type as before. The error message keeps its form,
+  `Error while querying GraphDB (<status>) - <answer>`, so code that reads the message
+  keeps working.
+
+  The client logs a refusal only at DEBUG, with the report. Up to 2.1.1 it logged it at ERROR,
+  like every other error status. A refusal is an outcome that the caller expects and catches,
+  so the caller decides how loud it is. Every other error status still logs at ERROR.
+
+- **`PreconditionFailedError`** (`kapps_triplestore_interface/exceptions.py`, also exported
+  from the package). A checked write raises it when the store found its precondition false.
+  Nothing was written. It is a `TripleStoreInterfaceError` and a sibling of
+  `GraphDbException`, not a subclass: the store answered the request successfully. It carries
+  `.message`, `.triples` (the triples that the precondition named) and `.named_graph`.
+
+- **`absent_subjects` on `triples_add` and `triples_update`.** A list of IRIs that must not yet
+  be the subject of an explicit triple in the target graph. The check is one more
+  `FILTER NOT EXISTS { <s> ?p ?o }` in the same update. A subject that occurs only as an
+  object (a forward reference) passes. With `absent_subjects`, the write is checked also when
+  `check_exist=False`. In the error, a subject appears as `(subject, None, None)`.
+
+- **README section "What a write promises"**: the contract, the scope, the limits, and a
+  measurement of two concurrent writers.
+
+### Changed
+
+- **A false precondition raises instead of returning `False`**
+  (`triples_add`, `triples_delete`, `triples_update`, `triple_delete`, `triple_update`, with
+  `check_exist=True`, the default).
+
+  **Before:** the function sent an `ASK` and then, in a second request, the write. A false
+  precondition returned `False`, and callers dropped it. The `ASK` could also be stale by the
+  time the write ran.
+
+  **Now:** the precondition is in the `WHERE` of the update itself, and the update also writes a
+  receipt triple into the graph `urn:x-kapps:write-receipts`. The receipt lands only when the
+  `WHERE` matched, in the same commit as the change. One `ASK` for the receipt follows. If the
+  receipt is found, the function removes it and returns `True`. If the removal fails, the
+  function logs a warning and still returns `True`. If no receipt is found, the function raises
+  `PreconditionFailedError`. The functions keep `-> bool` and always return `True`.
+
+  A normal return means that the store evaluated the precondition as true and committed the
+  change. The store isolates only commits ("read committed"), so another writer can commit
+  between the evaluation and the commit. An invariant under concurrent writers belongs in a
+  SHACL shape.
+
+- **The precondition sees only the explicit triples of the target graph.** With a named graph,
+  the update uses `WITH <g>`. Without one, it uses `USING <http://rdf4j.org/schema/rdf4j#nil>`,
+  which selects the explicit triples of the default graph, and writes its removals in
+  `GRAPH <http://rdf4j.org/schema/rdf4j#nil> { … }`. A removal without `GRAPH` also removes the
+  copies of a triple in all named graphs. Effects:
+
+  - An old triple that is only inferred now raises. Before, the `ASK` found it, and the delete
+    did nothing.
+  - A checked delete without a named graph no longer removes the copies of the triple in named
+    graphs. A copy in a named graph also no longer satisfies the precondition.
+  - A triple that is both explicit and inferred stays visible after a delete, as before. The
+    docstrings now say so.
+
+- **`check_exist=False` is unchanged:** the same query forms as before, no receipt, and the
+  return value `True`. An unchecked `triples_update` still applies only when its old triples
+  match its `WHERE`.
+
+- **Removed `SPARQLQuery.insert_exists`, `SPARQLQuery.add_insert_exists_block` and
+  `SPARQLQueryType.INSERT_EXISTS`.** Their `FILTER NOT EXISTS { t1 . t2 }` means "not all of the
+  triples exist", which is not the precondition of an add. Nothing called them.
+
+### Fixed
+
+- **`clear_graph` reported a refused clear only as a log warning**
+  (`kapps_triplestore_interface/queries/rdf4j/graph_store.py`, `clear_graph`).
+
+  **Symptom:** a clear that the store refused looked like a clear that worked. Callers that did
+  not check the return value carried on over the old data. A seed that cleared the repository
+  then failed later, with an error that did not name the clear. A store with SHACL validation
+  refuses a clear when the remaining data would violate a shape, and it can fail with HTTP 500
+  while it validates.
+
+  **Root cause:** on any answer other than 204, `clear_graph` logged a warning and returned
+  `False`. It raised nothing, unlike `GraphDB.query`.
+
+  **Fix:** `clear_graph` raises on any answer other than 204, with the same mapping as
+  `GraphDB.query`: `ShaclValidationError`, with the store's report, when the answer is a SHACL
+  validation report, and `GraphDbException` otherwise. The message names the graph and the
+  repository: `Failed to clear graph <iri> in repository '<id>' (<status>) - <answer>`, or
+  `... the default graph ...`. Like `GraphDB.query`, it logs a refusal only at DEBUG and every
+  other error answer at ERROR. On success it returns `True`, as before. It no longer returns
+  `False`.
+
+- **A read on a connection that the store closed while idle failed instead of being sent
+  again** (`kapps_triplestore_interface/graph_db.py`, `GraphDB.query`).
+
+  **Symptom:** a read raised `requests.ConnectionError: ('Connection aborted.',
+  RemoteDisconnected('Remote end closed connection without response'))` when the client's
+  connection had been idle for about as long as the store's idle limit. The remote GraphDB
+  this was measured against closes a keep-alive connection after 5 s idle. Measured on
+  2026-10-02: after an idle time of 5.0 s, 9 of 16 reads failed; after 4.5 s and after 6.0 s,
+  none of 16 failed. With the fix, 16 of 16 reads succeeded after 5.0 s idle, 9 of them on
+  the second send.
+
+  **Root cause:** the client keeps one session per thread, so its connections are reused
+  across calls. When the next request leaves on a pooled connection just as the store closes
+  it, the store answers nothing. Nothing in the client sent the request again.
+
+  **Fix:** when a read (`update=False`) gets no answer because the store closed the
+  connection, `GraphDB.query` sends it once more, on a fresh connection. A second failure
+  raises `requests.ConnectionError` as before. An update (`update=True`) is never sent again,
+  because the store may have applied it, and a second one could apply it twice. It raises as
+  before. Every function that reads through `GraphDB.query`, for example `triples_get` and
+  `triple_exists`, gets the retry as well.
+
+- **Joining two groups of blank-node triples raised `TypeError`**
+  (`kapps_triplestore_interface/utils/utils.py`, `group_triples_by_bnode`).
+
+  **Symptom:** `any_triple_exists`, and therefore `triples_add` with its default
+  `check_exist=True`, raised
+  `TypeError: unsupported operand type(s) for |=: 'list' and 'list'` on an OWL list or
+  intersection. In such a structure, one triple links two blank nodes that are already in
+  different groups, for example an `rdf:first` cell and the restriction that it points at.
+
+  **Root cause:** the function merged the two groups with `|=` on two lists. With `|=` made
+  valid, the merge would still be incomplete: only the triple's own blank nodes pointed at the
+  merged group, and the other members of the absorbed group kept the old one.
+
+  **Fix:** the function keeps each group as its set of blank nodes and its triples. A triple
+  that touches several groups joins all of them into the first, with all their members. Groups
+  keep the order of their first triple. New tests cover two groups that one triple joins.
+
+- **A literal with a datatype outside the type map made its whole result set unreadable**
+  (`kapps_triplestore_interface/utils/utils.py`, `from_xsd_literal`).
+
+  **Symptom:** `GraphDB.query(..., convert_bindings=True)` raised `KeyError` when one literal
+  in the result had such a datatype. `triples_get` failed the same way. Custom datatypes
+  failed, for example GeoSPARQL's `wktLiteral`. So did XSD types that the map does not
+  cover, for example `xsd:dateTimeStamp` and `xsd:gMonth`. A write of the same literal
+  worked.
+
+  **Root cause:** `from_xsd_literal` looked up the datatype in `XSDToPythonMapper` with a
+  bare subscript. RDF allows any IRI as a datatype, and the map has no fallback.
+
+  **Fix:** a datatype without a converter now gives back an `rdflib.Literal` that keeps the
+  datatype. rdflib's own `Literal.toPython()` does the same. The `Literal` is a `str`, and
+  `str(value)` gives its lexical form. A write with the value stores the same typed literal
+  again. A plain `str` would lose the datatype, and `triples_add` would read it as an IRI.
+  Datatypes in the map convert as before.
+
+  Reported, with a first fix, by Jingcheng Wu in a pull request on the public repository.
+
 ## 2.1.1 — 2026-09-17
 
 ### Fixed

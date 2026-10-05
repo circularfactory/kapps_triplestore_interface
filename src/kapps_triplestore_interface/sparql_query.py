@@ -15,7 +15,6 @@ class SPARQLQueryType(Enum):
     DESCRIBE = "DESCRIBE"
     ASK = "ASK"
     INSERT_DATA = "INSERT DATA"
-    INSERT_EXISTS = "INSERT EXISTS"
     DELETE_DATA = "DELETE DATA"
     DELETE_INSERT = "DELETE/INSERT"
 
@@ -158,49 +157,6 @@ WHERE {{
         )
         block = "\n".join(block_parts)
         self._query_blocks.append({"type": SPARQLQueryType.INSERT_DATA, "data": block})
-
-    @classmethod
-    def insert_exists(
-        cls,
-        triples: TriplesLike,
-        **kwargs,
-    ) -> "SPARQLQuery":
-        """
-        Create a new SPARQLQuery instance with an INSERT ... WHERE NOT EXISTS block.
-        Refer to `add_insert_exists_block` for details.
-        """
-        query = cls(**kwargs)
-        query.add_insert_exists_block(triples)
-        return query
-
-    def add_insert_exists_block(
-        self,
-        triples: TriplesLike,
-    ) -> None:
-        """
-        Add an INSERT ... WHERE NOT EXISTS block.
-
-        Args:
-            triples (TriplesLike): Triples to insert when they do not already exist.
-        """
-        block_parts = []
-        data_combined = "\n".join(
-            utils.triple_to_string(utils.sanitize_triple(triple), ".")
-            for triple in triples
-        )
-        block_parts.append(
-            f"""INSERT {{
-        {utils.encapsulate_named_graph(self._named_graph, data_combined)}
-}}
-WHERE {{ FILTER NOT EXISTS {{
-    {utils.encapsulate_named_graph(self._named_graph, data_combined)}
-}} }}
-"""
-        )
-        block = "\n".join(block_parts)
-        self._query_blocks.append(
-            {"type": SPARQLQueryType.INSERT_EXISTS, "data": block}
-        )
 
     @classmethod
     def delete_data(
@@ -374,7 +330,6 @@ WHERE {{ FILTER NOT EXISTS {{
 
             elif self._query_blocks[0]["type"] in (
                 SPARQLQueryType.INSERT_DATA,
-                SPARQLQueryType.INSERT_EXISTS,
                 SPARQLQueryType.DELETE_DATA,
                 SPARQLQueryType.DELETE_INSERT,
             ):
