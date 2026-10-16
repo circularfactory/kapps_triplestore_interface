@@ -41,6 +41,9 @@ def iri_exists(
 
     Raises:
         InvalidInputError: If none of `as_sub`, `as_pred`, or `as_obj` is True.
+        TripleStoreResponseError: If the store answers with an error status. A failure is never
+            read as False.
+        TripleStoreUnavailableError: If the store gives no answer.
     """
 
     # Check if either as_subject, as_predicate, or as_object is True
@@ -68,7 +71,7 @@ def iri_exists(
         include_implicit=include_implicit,
     )
     result = self.query(query=query, update=False)
-    if result is not None and result["boolean"]:
+    if result["boolean"]:
         self.logger.debug(f"Found IRI {iri}")
         return True
 
@@ -251,9 +254,6 @@ def owl_get_classes_of_individual(
         include_implicit=include_implicit,
     )
     results = self.query(query=query, convert_bindings=True)
-
-    if results is None:
-        return []
 
     if local_name:
         classes = [

@@ -45,7 +45,7 @@ def _explicit(db: GraphDB, graph: Optional[str] = "any") -> set:
         params["context"] = URIRef(graph).n3()
     response = db._make_request(
         "get",
-        f"repositories/{db.repository}/statements",
+        f"repositories/{db.dataset}/statements",
         params=params,
         headers={"Accept": "application/n-quads"},
     )
@@ -80,8 +80,8 @@ def store(db: GraphDB):
     db.named_graph = None
 
     def wipe():
-        db.clear_graph(None)
-        db.clear_graph(GRAPH)
+        db.graph_clear(None)
+        db.graph_clear(GRAPH)
         db.query(f"DROP SILENT GRAPH {RECEIPT_GRAPH.n3()}", update=True)
 
     wipe()
@@ -410,8 +410,8 @@ def test_two_writers_on_the_same_old_triple(store, graph):
     old = (A, R, O)
 
     for round_ in range(ROUNDS):
-        store.clear_graph(graph)
-        store.clear_graph(None)
+        store.graph_clear(graph)
+        store.graph_clear(None)
         _seed(store, [SCHEMA], None)
         _seed(store, [old], graph)
         barrier = threading.Barrier(2)

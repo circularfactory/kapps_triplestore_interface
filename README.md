@@ -21,21 +21,65 @@ uv sync
 
 ## Getting Started
 
-The package uses a single class named `GraphDB`. To use the interface, create an object from
-this class:
+`connect()` gives you a working, authenticated store. It takes where the store is, an auth
+provider for your identity:
 
 ```python
-from kapps_triplestore_interface import GraphDB, GraphDBCredentials
+from kapps_triplestore_interface import GDBTokenAuth, TripleStoreEndpoint, connect
 
-credentials = GraphDBCredentials(
-    base_url="<your_graph_db_url>",
-    username="<your_graph_db_user>",
-    password="<your_graph_db_password>",
-    repository="<your_selected_repository_id>",
+my_db = connect(
+    TripleStoreEndpoint(url="<your_graph_db_url>", dataset="<your_repository_id>"),
+    GDBTokenAuth("<your_graph_db_user>", "<your_graph_db_password>"),
 )
 
-my_db = GraphDB(credentials=credentials)
+# Or everything from TRIPLESTORE_URL, TRIPLESTORE_DATASET, TRIPLESTORE_USERNAME and
+# TRIPLESTORE_PASSWORD:
+my_db = connect(TripleStoreEndpoint.from_env(), GDBTokenAuth.from_env())
 ```
+
+`connect()` logs in and sends one probe to the dataset. So a broken configuration fails at the
+start and not at the first request. A write by an identity that may only read fails at the
+first write, as `TripleStoreAccessError`. The error types are those of the section "When a call
+fails". The endpoint holds no secret, so you can log it. The provider renews its token before
+it expires, and logs in again once when the store answers 401. The `GRAPHDB_*` variables are
+read as a deprecated fallback of the `TRIPLESTORE_*` ones; the API reference lists the
+providers and the variables.
+
+## The store contract
+
+Code above this interface types its store as `TripleStore`, which `connect()` returns. It
+declares the operations that the object-graph mapper, the middleware and the use cases call on
+a store, measured in their code, and no other; its docstring lists them. The GraphDB adapter,
+`GraphDB`, implements each one. A test double satisfies the contract without inheriting from
+it.
+
+### The store's registries
+
+A store keeps two registries that SPARQL does not cover. The contract has an operation for
+each, so that no code above the interface calls a vendor's endpoint for them:
+
+| Operation | What it does |
+|---|---|
+| `prefixes_get()` | Each prefix of the dataset, with the namespace IRI that it stands for, as a `dict`. The empty prefix is the key `""`. |
+| `prefix_set(prefix, iri)` | Lets `prefix` stand for the namespace `iri`. A prefix that the dataset has already stands for `iri` afterwards. |
+| `prefix_delete(prefix)` | Removes `prefix`. Every other prefix stays. |
+| `shapes_set(data, content_type)` | Replaces the SHACL shapes that the store validates the dataset against with the document `data`, of the media type `content_type`, for example `text/turtle`. An empty document removes every shape. |
+
+`""` is the empty prefix in each prefix operation. A failed operation raises; none returns a
+flag.
+
+**A store that has no such registry raises `TripleStoreNotSupportedError`**, and an operation
+is never a silent no-op. An adapter that inherits `TripleStore` and does not implement a
+registry raises it from the contract's own operations.
+
+**`shapes_set` on a dataset without SHACL validation raises `TripleStoreNotSupportedError`**,
+and writes nothing. GraphDB turns SHACL validation on only when a repository is created; on a
+repository without it, the shapes would be stored as plain data that validates nothing. The
+GraphDB adapter reads the repository's configuration to tell, and it refuses also when the
+configuration does not say. On a dataset with SHACL validation it replaces the shapes graph
+with `data` in one request, which the store applies whole or not at all. If the store refuses
+it, because the data of the dataset violates the new shapes, `shapes_set` raises
+`ShaclValidationError`, and the old shapes stay.
 
 ## What a write promises
 
@@ -78,17 +122,20 @@ subject of a triple in the target graph. A subject that occurs only as an object
   `urn:x-kapps:write-receipts`, in the same update. The function reads the receipt and then
   removes it. If the process stops between the write and the removal, the receipt stays, with
   its time.
-- **A transport error** (for example a timeout, or a connection that the store closed) raises
-  the `requests` exception unchanged, for example `requests.Timeout` or
-  `requests.ConnectionError`. The write is not sent again, and its receipt is not read: the
-  store can still commit the write after that.
+- **A write that gets no answer** (for example a timeout, or a connection that the store
+  closed) raises `TripleStoreUnavailableError`, chained to the error of the HTTP client. The
+  write is not sent again, and its receipt is not read: the store can still commit the write
+  after that. A retry by the caller is safe: a checked write refuses a second application with
+  `PreconditionFailedError`, and an insert or an import repeats as a no-op, because a graph is a
+  set. The exceptions are blank nodes, which a second insert creates again, and a raw update
+  that the caller writes itself.
 
 ## When the store refuses a write
 
 A repository with SHACL validation checks a write when it commits it. If the data would
 violate a shape, the store commits nothing of the write.
 `GraphDB.query` then raises `ShaclValidationError`, and so do the functions that send their
-update through it, for example `triples_add` and `triples_update`. `clear_graph` raises it too,
+update through it, for example `triples_add` and `triples_update`. `graph_clear` raises it too,
 when the store refuses a clear because the remaining data would violate a shape. The error's
 `report` is the store's validation report, unchanged:
 
@@ -102,9 +149,32 @@ except ShaclValidationError as refused:
 ```
 
 The client logs a refusal only at DEBUG, so your code decides how loud it is. When
-`GraphDB.query` or `clear_graph` gets any other error answer from the store, it logs it at ERROR
+`GraphDB.query` or `graph_clear` gets any other error answer from the store, it logs it at ERROR
 and raises a different type. To catch any error from this package, catch `TripleStoreInterfaceError` from
 `kapps_triplestore_interface.exceptions`.
+
+## When a call fails
+
+Each error type tells your code one action, so you choose with `except` and do not read the
+message. A message holds the store's answer unchanged.
+
+| Type | What happened | Action |
+|---|---|---|
+| `TripleStoreResponseError` | The store answered with an error status that no subtype below covers. `status` is that status. | Repair |
+| `AuthenticationError` | The store answered 401: it did not accept the credentials. | Repair |
+| `TripleStoreAccessError` | The store answered 403: the identity has no access to the dataset. | Repair |
+| `ShaclValidationError` | The store's shapes refused the write. `report` is the store's report. | Refused |
+| `TripleStoreUnavailableError` | The store cannot be reached, it did not answer in time, or the connection dropped. | Retry |
+| `PreconditionFailedError` | The precondition of a checked write was false, and nothing was written. | Refresh |
+| `TripleStoreNotSupportedError` | The store, or the dataset, cannot do the operation. | Fix the call |
+| `InvalidDatasetError` | The dataset does not exist on the store. | Repair |
+| `InvalidQueryError`, `InvalidInputError`, `InvalidIRIError` | The call is incorrect. | Fix the call |
+
+`AuthenticationError`, `TripleStoreAccessError` and `ShaclValidationError` are subtypes of
+`TripleStoreResponseError`, and each carries the store's status.
+
+Listing the datasets (`datasets_get`) and fetching a graph (`graph_get`) raise on an error
+answer. They never return `None`.
 
 ## Running Tests
 
@@ -127,8 +197,13 @@ export GRAPHDB_TEST_REPOSITORY="test-repo"
 uv run pytest tests -v
 ```
 
-Note: application/runtime credentials loaded via `GraphDBCredentials.from_env()` still use
-`GRAPHDB_REPOSITORY` by default.
+The test of `shapes_set` on a dataset without SHACL validation needs a second repository on the
+same store, created without SHACL validation, named by `GRAPHDB_TEST_REPOSITORY_WITHOUT_SHACL`.
+Without it, that test skips. The other tests of the shapes need SHACL validation in the test
+repository, and they leave it with no shapes.
+
+Note: the suite reads its dataset from `GRAPHDB_TEST_REPOSITORY`. An application builds its
+store from `TRIPLESTORE_DATASET`, as in "Getting Started", and never from that variable.
 
 ## Contributing
 

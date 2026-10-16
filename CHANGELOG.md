@@ -1,5 +1,291 @@
 # Changelog
 
+## 2.2.1 — 2026-10-16
+
+### Added
+
+- **`connect(endpoint, auth)` gives a caller a working, authenticated store**
+  (`kapps_triplestore_interface/connection.py`, also exported from the package). It builds the
+  GraphDB adapter, makes the auth provider log in now, and sends one probe, `ASK {}` on the
+  dataset. It returns the store, or raises: `TripleStoreUnavailableError` when the store
+  cannot be reached, `AuthenticationError` on a 401, `TripleStoreAccessError` on a 403,
+  `InvalidDatasetError` when the dataset does not exist, and `TripleStoreResponseError` on
+  any other error answer.
+
+- **The store contract** (`kapps_triplestore_interface/store.py`, also exported from the
+  package).
+
+  - **`TripleStore`**, a `Protocol`: the operations that code above the interface calls on a
+    store, and no other. Its docstring lists them. `GraphDB` implements it without inheriting
+    from it, and so does a test double.
+  - **`TripleStoreEndpoint(url, dataset)`**: where a store is. It holds no secret.
+    `TripleStoreEndpoint.from_env(dataset=None)` reads `TRIPLESTORE_URL` and
+    `TRIPLESTORE_DATASET`.
+
+- **The store registries: a dataset's prefixes and its SHACL shapes** (`TripleStore` and
+  `GraphDB`). SPARQL does not cover them, so the contract has four operations for them:
+  `prefixes_get()` returns each prefix with its namespace IRI as a `dict`, `prefix_set(prefix,
+  iri)` and `prefix_delete(prefix)` change one prefix, and `shapes_set(data, content_type)`
+  replaces the SHACL shapes that the store validates against; an empty document removes every
+  shape. `""` is the empty prefix. A store that has no such registry raises
+  `TripleStoreNotSupportedError`, never a silent no-op: an adapter that inherits `TripleStore`
+  without a registry raises it from the contract's own operations. The GraphDB adapter uses
+  the dataset's namespaces and RDF4J's shapes graph. Before it writes the shapes, it reads the
+  repository's configuration, and on a dataset without SHACL validation, or one whose
+  configuration does not say, `shapes_set` raises `TripleStoreNotSupportedError` and writes
+  nothing. The shapes are replaced in one request, which the store applies whole or not at
+  all: if the store refuses it, because the data violates the new shapes,
+  `ShaclValidationError` raises and the old shapes stay.
+
+- **Auth providers** (`kapps_triplestore_interface/auth.py`, also exported from the package).
+  `auth` in `connect()` and in `GraphDB` is typed `BasicAuth | GDBTokenAuth`; there is no
+  public type of a provider. `BasicAuth(username, password)` sends HTTP Basic
+  authentication. `GDBTokenAuth(username, password)` logs in for a GDB token on first use,
+  logs in again when the token is 29 days old (GraphDB's default validity is 30 days), and
+  once after the store answers 401. Each has `from_env()`, which reads `TRIPLESTORE_USERNAME`
+  and `TRIPLESTORE_PASSWORD`. A provider's `repr` never shows the password.
+
+- **`GraphDB` builds from an endpoint and an auth provider, and sends no request then**
+  (`GraphDB(endpoint=..., auth=...)`, keyword-only). The provider logs in at the first
+  request. Built from `credentials`, the client logs in and checks the repository when it is
+  built, as before.
+
+- **Error types that name their action** (`kapps_triplestore_interface/exceptions.py`, also
+  exported from the package). Each type tells the caller one action: Repair, Retry, Refresh,
+  Refused or Fix the call. Its docstring names it, and the README's section "When a call fails"
+  lists them.
+
+  - **`TripleStoreResponseError`**: the store answered with an error status. `status` is the
+    store's HTTP status, and the message holds the store's answer unchanged. It replaces
+    `GraphDbException`. It constructs with a message alone, as `GraphDbException` did; `status`
+    is then `None`.
+  - **`TripleStoreUnavailableError`**: the store cannot be reached, it did not answer in time,
+    or the connection dropped. It is chained to the error of the HTTP client. Its docstring
+    states why a caller's retry of a write is safe.
+  - **`TripleStoreAccessError`**: the store answered 403. A subtype of
+    `TripleStoreResponseError`.
+  - **`TripleStoreNotSupportedError`**: the store, or the repository, cannot do the operation.
+    The store registries raise it.
+
+  `AuthenticationError` and `ShaclValidationError` are now subtypes of
+  `TripleStoreResponseError`, and they carry `status` too. So `except GraphDbException` still
+  catches each of them.
+
+### Changed
+
+- **A request that the store answers with 401 is sent once more after a new login**
+  (`GraphDB._make_request`, so every operation, also of a client built from `credentials`
+  with a GDB token). The provider logs in again once, and the request is sent once more with
+  the new token; a second 401 raises `AuthenticationError`. This is safe for a write: a store
+  that answers 401 has not applied it. Up to 2.2.0 the client never logged in again, so every
+  request failed with a 401 once the token expired or the store restarted.
+  With Basic authentication a 401 still raises at once.
+
+- **An error answer of the store raises the type of its status**
+  (`GraphDB.query`, `graph_clear`, which was `clear_graph`, the login).
+  A 401 raises `AuthenticationError`, a 403 `TripleStoreAccessError`, a SHACL validation report
+  `ShaclValidationError` as before, and any other error status `TripleStoreResponseError`. Each
+  carries the status. Up to 2.2.0, a 401 or a 403 of a query or a clear raised the general type.
+  The messages keep their form.
+
+- **The login reports the store's answer.** A refused login raises the type of its status, with
+  the message `Failed to obtain a GDB token (<status>) - <answer>`. Up to 2.2.0 every refused
+  login raised `AuthenticationError` with a fixed message that held neither the status nor the
+  answer. A login that the store answers with 401 still raises `AuthenticationError`.
+
+- **A request that gets no answer raises `TripleStoreUnavailableError`**
+  (`GraphDB._make_request`, so every operation). Up to 2.2.0 the error of the HTTP client
+  crossed unchanged: `requests.ConnectionError`, `requests.ReadTimeout` and the others of their
+  families. The interface's error is chained to it: `__cause__` is that error, and the message
+  names the request and quotes it. A read whose pooled connection the store closed while idle
+  is still sent again once. A write is still never sent again. An error of the HTTP client that
+  is not a failure of the transport, for example a URL without a scheme, is raised unchanged.
+
+- **Listing the repositories and fetching a graph raise on an error answer**
+  (`GraphDB.datasets_get` and `graph_get`, which were `get_list_of_repositories` and
+  `fetch_statements`). Up to 2.2.0 they logged a warning and
+  returned `None`. They now log at ERROR and raise the type of the status, with the message
+  `Failed to list repositories (<status>) - <answer>` or
+  `Failed to fetch <graph> in repository '<repository>' (<status>) - <answer>`. A client that is
+  built while the store refuses the list raises that error. Up to 2.2.0 it raised a `TypeError`.
+
+- **The existence checks have no branch for a missing answer**
+  (`triple_exists`, `any_triple_exists`, `all_triple_exists`, `iri_exists`). `GraphDB.query`
+  raises the store's error before them, so the branch never ran. A failing store raises the
+  store's error, never `InvalidInputError`, and never reads as `False`.
+
+### Deprecated
+
+- **`GRAPHDB_URL`, `GRAPHDB_REPOSITORY`, `GRAPHDB_USERNAME` and `GRAPHDB_PASSWORD` are the
+  deprecated fallback of the `TRIPLESTORE_*` variables.** The `from_env()` methods of the
+  endpoint and of the auth providers read a `GRAPHDB_*` variable when its `TRIPLESTORE_*`
+  variable is not set, and emit one `DeprecationWarning` that names the variable which
+  replaces it. `GraphDB.from_env()` reads the `GRAPHDB_*` variables as before, without a
+  warning. `GraphDBCredentials.from_env()` reads them as before too; only the use of the
+  deprecated name `GraphDBCredentials` warns, as the next entry says.
+
+- **The public names follow one convention and name no vendor, and the old names are
+  deprecated aliases.** The names are those of the KAPPS family's decision record *The triple
+  store border*: the noun first and the verb second, the Graph Store verbs of the SPARQL 1.1
+  Graph Store HTTP Protocol, and *dataset* for the unit of a store, which GraphDB calls a
+  repository. Each old name still works. Each use of it emits one `DeprecationWarning` that
+  names its successor, at the line that uses it. A later major release removes them.
+
+  | Old | New |
+  |---|---|
+  | `GraphDB.fetch_statements` | `GraphDB.graph_get` |
+  | `GraphDB.import_statements` | `GraphDB.graph_add` |
+  | `GraphDB.clear_graph` | `GraphDB.graph_clear` |
+  | `GraphDB.get_list_of_named_graphs` | `GraphDB.graphs_get` |
+  | `GraphDB.get_list_of_repositories` | `GraphDB.datasets_get` |
+  | the store's `repository` attribute, read or set | the store's `dataset` attribute |
+  | `GraphDBCredentials` | a `TripleStoreEndpoint` and an auth provider, `GDBTokenAuth` or `BasicAuth` |
+  | the `use_gdb_token` flag of `GraphDB` | the auth provider: `GDBTokenAuth`, or `BasicAuth` for `use_gdb_token=False` |
+  | `InvalidRepositoryError` | `InvalidDatasetError` |
+
+  - **The methods and the attribute.** A new name takes the same parameters and does what its
+    old name did; the old name calls it. So `graph_add` and `import_statements` raise alike
+    when the store does not accept an import (see *Fixed*). Setting `dataset` checks that the
+    store has the dataset, as setting `repository` did. The contract type `TripleStore`
+    declares the new names only.
+  - **`GraphDBCredentials`.** Each use of the name warns: an import of it from the package or
+    from `kapps_triplestore_interface.utils.graph_db_credentials`, or a read of it as an
+    attribute. The class is the same, so its fields, `from_env()` and `GraphDB(credentials=...)`
+    keep working, and a client built from it builds the endpoint and the auth provider from it,
+    without a second warning. The package's `__all__` still names it, so `import *` imports it
+    and warns once.
+  - **`use_gdb_token`.** Each call of `GraphDB` that gives the flag warns, by keyword or by
+    position. Without it, a client built from credentials uses the GDB token, as before.
+  - **`InvalidRepositoryError`.** It is the same class as `InvalidDatasetError`, so `except
+    InvalidRepositoryError` catches the new name's errors. Each use of the old name warns, as
+    the use of `GraphDbException` does.
+
+- **`GraphDbException` is a deprecated alias of `TripleStoreResponseError`.** It is the same
+  class, so `except GraphDbException`, a subclass of it and `GraphDbException(message)` keep
+  working. Each use of the old name emits one `DeprecationWarning` that names
+  `TripleStoreResponseError`. A later major release removes it.
+
+### Fixed
+
+- **Query and update validation stay correct when several threads validate at once**
+  (`kapps_triplestore_interface/utils/utils.py`, `validate_query` and `validate_update_query`).
+  Two threads that made the first use of a SPARQL grammar element at the same moment could
+  break rdflib's shared grammar for the rest of the process, and every later validation on
+  that path failed with `InvalidQueryError: ... Param.postParse2() missing 1 required
+  positional argument: 'tokenList'`. pyparsing's first-call probe of each parse action is not
+  thread-safe, and no released rdflib or pyparsing fixes it. Every rdflib SPARQL parse the
+  interface makes now runs behind one process-wide lock; a forked child gets a free lock. A
+  single thread sees no change.
+
+- **A query no longer parses and formats its answer for a DEBUG line that is off**
+  (`kapps_triplestore_interface/graph_db.py`, `query`). The DEBUG line was an f-string that
+  called the response's JSON parser and formatted the whole answer, so Python did it whether
+  DEBUG was on or not: every answer was parsed twice and formatted, about 1.2 s per 157 MB
+  read. The answer is now parsed once, and the line is formatted only when the logger writes
+  it. With DEBUG on, the line is the same as before.
+
+- **`IRI` accepts `urn:` IRIs, so a leftover receipt no longer breaks converted reads,
+  `graphs_get` and the clear of the receipt graph**
+  (`kapps_triplestore_interface/utils/iri.py`). A checked write names its receipt
+  `urn:uuid:<uuid4>`, its predicate `urn:x-kapps:appliedAt` and its graph
+  `urn:x-kapps:write-receipts`. `IRI` refused all three ("multiple ':' separators"), so a
+  receipt that stayed behind (a process stopped, or the delete of the receipt failed) made each
+  read with `convert_bindings=True` that reached it raise, made `graphs_get` raise, and made
+  `graph_clear` of the receipt graph raise before it sent a request. `IRI` now accepts the form
+  `urn:<NID>:<NSS>` (RFC 8141 syntax): a lower-case `urn:`, a NID of 2 to 32 letters, digits or
+  hyphens that neither starts nor ends with a hyphen, a non-empty NSS that can contain `:`, and
+  at most one `#`. The string is kept as it is. Malformed `urn:` input still raises
+  `InvalidIRIError`; so do other schemes such as `mailto:`, and an upper-case `URN:`. The
+  messages of the checks that count `:` are unchanged. `.short` still raises `ValueError` for
+  an IRI without `#`, as for http(s) IRIs.
+
+- **`import_statements` raises when the store does not accept the import**
+  (`kapps_triplestore_interface/queries/rdf4j/graph_store.py`). It returned `False` on a
+  refused write, and the store's answer reached only a log warning, so a SHACL repository's
+  refusal went unnoticed. Now any answer but 204 raises, as `clear_graph()` does:
+  `ShaclValidationError` with the store's report, `AuthenticationError` on a 401 (also after
+  the one new login), `TripleStoreAccessError` on a 403, and `TripleStoreResponseError` with
+  the status and the body on any other status. A 204 still returns `True`. POST and PUT, for a
+  named graph and for the default graph, behave alike. A caller that read the return value
+  as a success flag now catches the exception instead. The import's new name is `graph_add`
+  (see *Deprecated*); both names raise.
+
+- **`to_literal` replaced the datatype of an `rdflib.Literal` with `xsd:string`**
+  (`kapps_triplestore_interface/utils/utils.py`, `to_literal`).
+
+  **Symptom:** `to_literal(Literal("http://h:1/", datatype=XSD.anyURI))` gave
+  `"http://h:1/"^^xsd:string`. A writer that passes each literal value through `to_literal`,
+  as an object-graph mapper does, stored a typed literal as `xsd:string`. So a URL-valued
+  property, for example the address of a service, could not be stored as the `xsd:anyURI`
+  that its ontology declares.
+
+  **Root cause:** a `Literal` is also a `str`. Without a `datatype` argument, `to_literal` gave
+  every `str` the datatype `xsd:string`, and rdflib lets that argument replace the datatype of
+  a `Literal`.
+
+  **Fix:** without a `datatype` argument, a `Literal` keeps its own datatype. A `datatype`
+  argument still replaces it. A plain `str`, and a `Literal` without a datatype, still become
+  `xsd:string`.
+
+- **An `xsd:anyURI` value was read as an `IRI`, so it could not be updated or removed**
+  (`kapps_triplestore_interface/utils/xsd_typemap.py`, `XSDToPythonMapper`).
+
+  **Symptom:** `triples_get` and `GraphDB.query(..., convert_bindings=True)` gave an
+  `xsd:anyURI` literal back as an `IRI`, and the `IRI` dropped a trailing slash:
+  `"http://h:1/"` was read as `IRI('http://h:1')`. A write that named the value as read named a
+  term that the store does not hold. A checked update or delete of the value raised
+  `PreconditionFailedError`, and an unchecked one changed nothing. A value with a scheme other
+  than `http` or `https`, for example `mqtt://broker:1883`, made the read raise
+  `InvalidIRIError`.
+
+  **Root cause:** `XSDToPythonMapper` converted `xsd:anyURI` with `IRI`. `IRI` normalises its
+  input for use as a node: it removes a trailing `/`, `#` or `:`, and it accepts only `http`
+  and `https` IRIs and registered prefixes. The lexical form of a literal must stay as stored.
+
+  **Fix:** `xsd:anyURI` has no converter any more; the map gives `None` for it, as rdflib's own
+  map does. The value reads back as an `rdflib.Literal` with the datatype `xsd:anyURI` and the
+  lexical form as stored, like every other datatype without a converter. `to_literal` and the
+  write functions write that `Literal` as the same typed literal, so a value that was read can
+  be updated and removed.
+
+  **What changes for a caller:** a read of an `xsd:anyURI` literal returns a `Literal`, not an
+  `IRI`. A `Literal` is a `str`, and `str(value)` is the value as stored. Code that used the
+  value as an `IRI`, for example in a query pattern, converts it explicitly with
+  `IRI(str(value))`. An IRI that is stored as a node, not as a literal, still reads as an `IRI`.
+  To write a URL-valued literal, pass `Literal(value, datatype=XSD.anyURI)`: an `IRI` or a
+  plain `str` in the object position is written as a node.
+
+  **Tests:** the new offline tests in `tests/test_anyuri_round_trip.py` use an in-memory
+  rdflib dataset behind the client's HTTP layer. They write, read, re-address and remove
+  `xsd:anyURI` values, with a trailing slash and with the scheme `mqtt`, and they replace a
+  value that is stored as `xsd:string` with an `xsd:anyURI` value.
+
+- **`get_list_of_repositories()` and `fetch_statements()` failed after an idle close instead of
+  being sent again**
+  (`kapps_triplestore_interface/graph_db.py`, `GraphDB._make_request`;
+  `kapps_triplestore_interface/queries/rdf4j/graph_store.py`, `fetch_statements`).
+
+  **Symptom:** when the store closed a keep-alive connection while it sat idle, the next
+  `get_list_of_repositories()` or `fetch_statements()` call on it raised `requests.ConnectionError`
+  with `RemoteDisconnected`. `GraphDB.query()` already sent its read once more in that case.
+
+  **Fix:** both reads now send once more on a fresh connection, under the same rule as
+  `query()`: one more send, only when the store closed the connection without an answer. Any
+  other failure is raised with no second send, and so is a second idle close. The retry is one
+  flag, `retry_after_idle_close`, on `GraphDB._make_request`; `query()` uses it for a read
+  too. A write is never sent again. An idle close that arrives over TLS as an end-of-file error
+  is still not retried.
+
+  **Tests:** the new offline tests in `tests/test_idle_connection_retry.py` use the local
+  keep-alive server that closes the idle connection before each read. They cover both reads,
+  a second idle close, and a failure that is not an idle close.
+
+- **`InvalidRepositoryError` printed an empty list when the server has no repositories**: it now says that the server has no repositories and names the server (`GraphDB._validate_repository`); a name missing from a non-empty list keeps its message.
+
+- **The wheel ships the `py.typed` marker (PEP 561)**, so that a type checker such as mypy reads the package's own annotations instead of reporting an untyped import for every import of `kapps_triplestore_interface`.
+
+- **The package metadata listed Jan-Felix Klein with a misspelt e-mail address**: the `authors` entry in `pyproject.toml` now carries his working address, `jfklein@kth.se`. Releases already published keep the old address.
+
 ## 2.2.0 — 2026-10-05
 
 ### Added

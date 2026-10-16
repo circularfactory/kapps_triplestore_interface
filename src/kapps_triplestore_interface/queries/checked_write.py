@@ -240,9 +240,9 @@ def checked_write(
 
     Raises:
         PreconditionFailedError: The store found the precondition false; nothing was written.
-        GraphDbException: The store refused a request. A failure of the write itself propagates
-            unchanged, and the receipt is not consulted: the store may still commit it.
-        requests.RequestException: A request got no answer, for example a timeout. For the
+        TripleStoreResponseError: The store refused a request. A failure of the write itself
+            propagates unchanged, and the receipt is not consulted: the store may still commit it.
+        TripleStoreUnavailableError: A request got no answer, for example a timeout. For the
             write, as above: it propagates unchanged, the write is not sent again, and the
             receipt is not consulted.
     """

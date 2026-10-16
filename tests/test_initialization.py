@@ -1,7 +1,7 @@
 import os
 import pytest
 from kapps_triplestore_interface import GraphDB, GraphDBCredentials
-from kapps_triplestore_interface.exceptions import AuthenticationError, InvalidRepositoryError
+from kapps_triplestore_interface.exceptions import AuthenticationError, InvalidDatasetError
 
 
 def test_credentials_valid(db: GraphDB):
@@ -79,5 +79,5 @@ def test_invalid_repository(db: GraphDB):
         repository="SomeWrongRepository",
     )
 
-    with pytest.raises(InvalidRepositoryError):
+    with pytest.raises(InvalidDatasetError):
         GraphDB(credentials=credentials)

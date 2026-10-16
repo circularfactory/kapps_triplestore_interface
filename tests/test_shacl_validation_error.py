@@ -13,8 +13,8 @@ import requests
 
 from kapps_triplestore_interface import GraphDB, GraphDBCredentials, ShaclValidationError
 from kapps_triplestore_interface.exceptions import (
-    GraphDbException,
     TripleStoreInterfaceError,
+    TripleStoreResponseError,
 )
 from kapps_triplestore_interface.queries.checked_write import RECEIPT_GRAPH
 
@@ -91,7 +91,7 @@ def test_a_recorded_refusal_raises_the_type_with_the_report_verbatim(answering):
     # The message keeps the form that every other store error has, so a caller that reads
     # the text keeps working.
     assert str(refused.value) == f"Error while querying GraphDB (500) - {RECORDED_REPORT}"
-    assert isinstance(refused.value, GraphDbException)
+    assert isinstance(refused.value, TripleStoreResponseError)
     assert isinstance(refused.value, TripleStoreInterfaceError)
 
 
@@ -137,10 +137,11 @@ def test_every_other_error_status_raises_the_general_type(
 ):
     db = answering(_response(status, media_type, body))
 
-    with pytest.raises(GraphDbException) as failed:
+    with pytest.raises(TripleStoreResponseError) as failed:
         db.query(UPDATE, update=True)
 
-    assert type(failed.value) is GraphDbException
+    assert type(failed.value) is TripleStoreResponseError
+    assert failed.value.status == status
     assert str(failed.value) == f"Error while querying GraphDB ({status}) - {body}"
 
 
@@ -152,7 +153,7 @@ def test_every_other_error_status_still_logs_at_error(
     # The client logs at INFO when it is built. Only the records of the query count.
     caplog.clear()
 
-    with caplog.at_level(logging.DEBUG), pytest.raises(GraphDbException):
+    with caplog.at_level(logging.DEBUG), pytest.raises(TripleStoreResponseError):
         db.query(UPDATE, update=True)
 
     assert [

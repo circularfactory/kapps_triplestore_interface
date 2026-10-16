@@ -18,7 +18,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kapps-triplestore-interface"
-version = "2.2.0"
+version = "2.2.1"
 description = "SPARQL queries and atomic updates against a GraphDB triplestore, as callable Python methods."
 readme = "README.md"
 requires-python = ">=3.12,<4.0"
@@ -32,7 +32,7 @@ requires-python = ">=3.12,<4.0"
 # before a release goes out, because this channel closed once already without anyone noticing:
 # see the note above the build backend.
 authors = [
-    { name = "Jan-Felix Klein", email = "janfelixklein@ooglemail.com" },
+    { name = "Jan-Felix Klein", email = "jfklein@kth.se" },
     { name = "Nico Brandt", email = "nico.g.brandt@gmail.com" },
     { name = "Sören Weindel", email = "soeren.weindel@kit.edu" },
     { name = "Etienne Hoffmann", email = "etienne.hoffmann@kit.edu" },

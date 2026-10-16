@@ -34,6 +34,11 @@ def triple_exists(
 
     Returns:
         bool: True if the triple exists, False otherwise.
+
+    Raises:
+        TripleStoreResponseError: If the store answers with an error status. A failure is never
+            read as False.
+        TripleStoreUnavailableError: If the store gives no answer.
     """
     triple = utils.sanitize_triple(triple)
     named_graph = IRI(named_graph) if named_graph is not None else self.named_graph
@@ -45,7 +50,7 @@ def triple_exists(
         named_graph=named_graph,
     )
     result = self.query(query=query)
-    if result is None or result["boolean"] is False:
+    if result["boolean"] is False:
         self.logger.debug(
             f"Unable to find triple ({utils.triple_to_string(triple)}), named_graph: {named_graph or "default"}, repository: {self._repository}"
         )

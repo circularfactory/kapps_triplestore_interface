@@ -14,7 +14,11 @@ pages:
   release's tag, because a page on the documentation site has no repository root beside it.
 - **The reference lists undocumented members too** (``undoc-members``). Not every public class
   and function here carries a docstring, and a reference that silently left them out would
-  read as the whole API while showing part of it. They appear with their signatures.
+  read as the whole API while showing part of it. They appear with their signatures. A
+  deprecated name is left out: the reference shows the name that replaces it.
+
+The footer's copyright text is read from the ``LICENSE`` two directories above this file, so a
+vendored copy needs a ``Copyright (c) <year> <holder>`` line there, or the build raises.
 """
 
 import logging
@@ -26,7 +30,31 @@ from pathlib import Path
 
 project = "kapps-triplestore-interface"
 author = "Jan-Felix Klein, Nico Brandt, Sören Weindel, Etienne Hoffmann"
-copyright = "2025, Jan-Felix Klein; 2026, Etienne Hoffmann and Sören Weindel"  # noqa: A001 - Sphinx requires this name
+
+
+def _copyright_from_license(license_path: Path) -> str:
+    """The footer's copyright text, read from the copyright lines of the LICENSE.
+
+    ``Copyright (c) 2026 Etienne Hoffmann`` becomes ``2026, Etienne Hoffmann``, the form Sphinx
+    prints. The LICENSE is the only place the holder and year are written; several lines join
+    with ``; ``.
+    """
+    entries = re.findall(
+        r"^Copyright(?: \(c\))? (\S+) (.+?)\s*$",
+        license_path.read_text(encoding="utf-8"),
+        flags=re.MULTILINE | re.IGNORECASE,
+    )
+    if not entries:
+        raise ValueError(
+            f"{license_path} has no 'Copyright (c) <year> <holder>' line, so the docs footer "
+            "cannot be derived from it."
+        )
+    return "; ".join(f"{year}, {holder}" for year, holder in entries)
+
+
+copyright = _copyright_from_license(  # noqa: A001 - Sphinx requires this name
+    Path(__file__).parent.parent.parent / "LICENSE"
+)
 
 release = _installed_version("kapps-triplestore-interface")
 version = ".".join(release.split(".")[:2])
@@ -167,6 +195,17 @@ def _skip_loggers(app, what, name, obj, skip, options):
     return None
 
 
+def _skip_deprecated(app, what, name, obj, skip, options):
+    # A deprecated name carries `__deprecated__` (PEP 702), and a deprecated property carries it
+    # on its getter. The reference shows only the names that replace them; the changelog's
+    # Deprecated section lists the old names.
+    marked = obj.fget if isinstance(obj, property) else obj
+    if getattr(marked, "__deprecated__", None):
+        return True
+    return None
+
+
 def setup(app):
     app.connect("source-read", _readme_as_landing_page)
     app.connect("autodoc-skip-member", _skip_loggers)
+    app.connect("autodoc-skip-member", _skip_deprecated)

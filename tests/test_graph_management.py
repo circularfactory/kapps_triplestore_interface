@@ -2,7 +2,7 @@ from kapps_triplestore_interface import GraphDB
 
 
 def test_get_repositories(db: GraphDB):
-    _repositories = db.get_list_of_repositories()
+    _repositories = db.datasets_get()
     # check if repositories is not empty
     assert _repositories is not None
     assert type(_repositories) == list
@@ -10,6 +10,6 @@ def test_get_repositories(db: GraphDB):
 
 
 def test_list_named_graphs(db: GraphDB):
-    named_graphs = db.get_list_of_named_graphs()
+    named_graphs = db.graphs_get()
     assert named_graphs is not None
     assert type(named_graphs == list)

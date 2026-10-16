@@ -36,7 +36,7 @@ class KafkaManager:
             List[str]: Connector IDs; empty when none are found.
 
         Raises:
-            GraphDbException: If the underlying query execution fails.
+            TripleStoreResponseError: If the underlying query execution fails.
         """
         query = SPARQLQuery.select(
             variables=["?cntUri", "?cntStr"],
@@ -63,7 +63,7 @@ class KafkaManager:
             Optional[Dict[str, Dict]]: Mapping of connector name to status; `None` when no results.
 
         Raises:
-            GraphDbException: If the underlying query execution fails.
+            TripleStoreResponseError: If the underlying query execution fails.
         """
         query = SPARQLQuery.select(
             variables=["?cntUri", "?cntStr", "?cntStatus"],
@@ -101,7 +101,7 @@ class KafkaManager:
             Optional[str]: The creation options string when available, otherwise `None`.
 
         Raises:
-            GraphDbException: If the underlying query execution fails.
+            TripleStoreResponseError: If the underlying query execution fails.
         """
         query = SPARQLQuery.select(
             variables=["?createString"],

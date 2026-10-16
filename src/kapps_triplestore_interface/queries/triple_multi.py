@@ -124,6 +124,12 @@ def any_triple_exists(
 
     Returns:
         bool: True if at least one exists, False otherwise.
+
+    Raises:
+        InvalidInputError: If `triples` is empty.
+        TripleStoreResponseError: If the store answers with an error status. A failure is never
+            read as False.
+        TripleStoreUnavailableError: If the store gives no answer.
     """
     named_graph = IRI(named_graph) if named_graph is not None else self.named_graph
 
@@ -149,10 +155,6 @@ def any_triple_exists(
         named_graph=named_graph,
     )
     ask_result = self.query(query=query, update=False)
-    if ask_result is None:
-        raise InvalidInputError(
-            f"Could not query 'any_triple_exists' for triples, named_graph: {named_graph or 'default'}, repository: {self._repository}"
-        )
 
     if ask_result["boolean"] is True:
         self.logger.debug(
@@ -180,6 +182,12 @@ def all_triple_exists(
 
     Returns:
         bool: True if all exist, False otherwise.
+
+    Raises:
+        InvalidInputError: If `triples` is empty.
+        TripleStoreResponseError: If the store answers with an error status. A failure is never
+            read as False.
+        TripleStoreUnavailableError: If the store gives no answer.
     """
     named_graph = IRI(named_graph) if named_graph is not None else self.named_graph
 
@@ -196,10 +204,6 @@ def all_triple_exists(
         named_graph=named_graph,
     )
     ask_result = self.query(query=query, update=False)
-    if ask_result is None:
-        raise InvalidInputError(
-            f"Could not query 'all_triple_exists' for triples ({triple_strings}), named_graph: {named_graph or "default"}, repository: {self._repository}"
-        )
 
     if ask_result["boolean"] is False:
         self.logger.debug(

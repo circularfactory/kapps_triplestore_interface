@@ -1,7 +1,22 @@
+"""The deprecated credentials of a GraphDB store.
+
+`GraphDBCredentials` is a deprecated name: a `TripleStoreEndpoint` and an auth provider,
+`GDBTokenAuth` or `BasicAuth`, replace it. Each use of the name emits one `DeprecationWarning`
+that names them. A client built from the credentials builds the endpoint and the provider from
+them.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 import os
+import warnings
+from typing import TYPE_CHECKING, Any
+
+_DEPRECATION = (
+    "GraphDBCredentials is deprecated; use TripleStoreEndpoint and an auth provider,"
+    " GDBTokenAuth or BasicAuth, which replace it."
+)
 
 
 @dataclass(frozen=True)
@@ -59,3 +74,19 @@ class GraphDBCredentials:
             password=password,
             repository=repository,
         )
+
+
+# The class under a private name, for the interface's own use, which must not warn: the adapter
+# reads the credentials, and `GraphDB.from_env()` builds them. The public name is not an
+# attribute of the module, so that each use of it goes through `__getattr__` and warns. A type
+# checker reads it as the class.
+_GraphDBCredentials = GraphDBCredentials
+if not TYPE_CHECKING:
+    del GraphDBCredentials
+
+
+def __getattr__(name: str) -> Any:
+    if name != "GraphDBCredentials":
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    warnings.warn(_DEPRECATION, DeprecationWarning, stacklevel=2)
+    return _GraphDBCredentials

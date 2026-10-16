@@ -1,5 +1,7 @@
 import logging
+import os
 import re
+import threading
 from typing import List, Union, Optional, Any, Dict
 from rdflib import Literal, XSD, Dataset, BNode, URIRef
 from rdflib.plugins.sparql.processor import prepareQuery
@@ -136,6 +138,25 @@ def triple_to_string(
     return f"{sub.n3()} {pred.n3()} {obj.n3()}" + (f" {line_end}" if line_end else "")
 
 
+# pyparsing probes the arity of each parse action on its first call, and the probe is not
+# thread-safe: two threads that make the first use of a SPARQL grammar element at once can break
+# rdflib's shared grammar for the rest of the process (`Param.postParse2() missing 1 required
+# positional argument: 'tokenList'`). No released rdflib or pyparsing fixes it, and the race is
+# per grammar element, so a warm-up at import does not help either. Every rdflib SPARQL parse
+# this interface makes therefore runs behind this one lock.
+_SPARQL_PARSE_LOCK = threading.RLock()
+
+
+def _renew_sparql_parse_lock() -> None:
+    """Give a forked child a free lock, in case another thread of the parent held it."""
+    global _SPARQL_PARSE_LOCK
+    _SPARQL_PARSE_LOCK = threading.RLock()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_renew_sparql_parse_lock)
+
+
 def validate_query(query: str):
     """
     Validate a SPARQL SELECT/ASK query string by parsing it.
@@ -150,13 +171,13 @@ def validate_query(query: str):
         InvalidQueryError: If parsing fails.
     """
     try:
-        # Attempt to prepare the query
-        prepareQuery(query)
-        return True
+        with _SPARQL_PARSE_LOCK:
+            prepareQuery(query)
     except Exception as e:
         error_message = f"SPAQRQL query validation failed: {e}"
         LOGGER.error(error_message)
         raise InvalidQueryError(error_message)
+    return True
 
 
 def validate_update_query(
@@ -175,13 +196,13 @@ def validate_update_query(
         InvalidQueryError: If validation fails.
     """
     try:
-        g = Dataset()
-        g.update(query)
-        return True
+        with _SPARQL_PARSE_LOCK:
+            Dataset().update(query)
     except Exception as e:
         error_message = f"SPAQRQL update query validation failed: {e}"
         LOGGER.error(error_message)
         raise InvalidQueryError(error_message)
+    return True
 
 
 def to_literal(
@@ -194,12 +215,17 @@ def to_literal(
 
     Args:
         value (Any): The Python value to convert.
-        datatype: (Optional[str]) Optional XSD datatype to use; inferred as `XSD.string` for strings.
+        datatype: (Optional[str]) Optional XSD datatype to use. Without it, an `rdflib.Literal`
+            keeps its own datatype, for example `XSD.anyURI`, and any other string becomes
+            `XSD.string`.
         as_string (Optional[bool]): If True, return the N3 string form of the literal. Defaults to False.
 
     Returns:
         Union[Literal, str]: The `rdflib.Literal` or its N3 string form when `as_string=True`.
     """
+    # A Literal is also a str. Without this, its own datatype was replaced with XSD.string.
+    if isinstance(value, Literal) and datatype is None:
+        datatype = value.datatype
     if isinstance(value, str) and datatype is None:
         datatype = XSD.string
     literal = Literal(value, datatype=datatype)
@@ -219,7 +245,8 @@ def from_xsd_literal(
     A datatype that `XSDToPythonMapper` has no converter for gives back an `rdflib.Literal`
     that keeps the datatype, as rdflib's own `Literal.toPython()` does. RDF allows any IRI as
     a datatype, for example GeoSPARQL's `wktLiteral`, and the map does not cover all of XSD
-    either. The `Literal` is a `str`, and a write with it stores the same typed literal.
+    either. `xsd:anyURI` has no converter on purpose. The `Literal` is a `str`, and a write
+    with it stores the same typed literal.
 
     Args:
         value (str): The lexical form of the literal.
@@ -229,8 +256,9 @@ def from_xsd_literal(
         Any: The converted Python value, or an `rdflib.Literal` when the datatype has
             no converter.
     """
-    # URIRef, not IRI: a datatype IRI can use any scheme, and IRI accepts only http(s) IRIs
-    # and registered prefixes. It would raise on a `urn:` datatype that rdflib accepts.
+    # URIRef, not IRI: a datatype IRI can use any scheme, and IRI accepts only http(s) and
+    # `urn:` IRIs and registered prefixes. It would raise on a `mailto:` or `tag:` datatype
+    # that rdflib accepts.
     converter = XSDToPythonMapper.get(URIRef(datatype))
     if converter is None:
         return Literal(value, datatype=datatype)

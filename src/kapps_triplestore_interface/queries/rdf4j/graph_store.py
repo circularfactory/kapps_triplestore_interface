@@ -1,10 +1,14 @@
+"""The Graph Store verbs: `graph_get`, `graph_add` and `graph_clear`.
+
+They follow the operations of the SPARQL 1.1 Graph Store HTTP Protocol: `graph_get` is its GET,
+`graph_add` its POST (or PUT, to overwrite) and `graph_clear` its DELETE. GraphDB serves them at
+the RDF4J endpoint `rdf-graphs/service` of a repository.
+"""
+
 from requests import Response
 from typing import TYPE_CHECKING, Optional
 from rdflib import Graph
-from kapps_triplestore_interface.exceptions import (
-    GraphDbException,
-    ShaclValidationError,
-)
+from kapps_triplestore_interface import _deprecation
 from kapps_triplestore_interface.utils.iri import IRI
 from kapps_triplestore_interface.utils.types import GraphNameLike
 
@@ -12,10 +16,10 @@ if TYPE_CHECKING:
     from kapps_triplestore_interface import GraphDB
 
 
-def fetch_statements(
+def graph_get(
     self: "GraphDB",
     graph_iri: Optional[GraphNameLike] = None,
-) -> Optional[Graph]:
+) -> Graph:
     """
     Fetch statements from a named or the default graph.
 
@@ -27,10 +31,16 @@ def fetch_statements(
             None, the default graph is fetched.
 
     Returns:
-        Optional[Graph]: The parsed graph on success; `None` when the request fails.
+        Graph: The parsed graph. An error answer raises instead.
 
     Raises:
-        requests.exceptions.RequestException: If the underlying HTTP request fails.
+        AuthenticationError: If the store answers 401.
+        TripleStoreAccessError: If the store answers 403.
+        TripleStoreResponseError: If the store answers with any other status than 200. It is
+            logged at ERROR. The message names the repository and the graph.
+        TripleStoreUnavailableError: If the request gets no answer. When the store closed the
+            connection without an answer, the read is sent once more, on a fresh connection,
+            and raises only if that fails as well.
     """
     graph_iri_str = (
         str(IRI(graph_iri)) if graph_iri else "http://www.openrdf.org/schema/sesame#nil"
@@ -43,15 +53,22 @@ def fetch_statements(
         endpoint,
         params={"graph": graph_iri_str},
         headers={"Content-Type": "application/x-turtle"},
+        retry_after_idle_close=True,
     )
 
     if response.status_code != 200:
-        self.logger.warning(
-            f"Failed to fetch named graph: {response.status_code} - {response.text}"
-            if graph_iri_str
-            else f"Failed to fetch default graph: {response.status_code} - {response.text}"
+        # `query()`'s mapping of an error answer to a type. Imported here, not at the top:
+        # `graph_db` imports this module while it defines `GraphDB`.
+        from kapps_triplestore_interface.graph_db import (  # pylint: disable=import-outside-toplevel
+            _raise_error_answer,
         )
-        return None
+
+        target = f"graph <{graph_iri_str}>" if graph_iri else "the default graph"
+        _raise_error_answer(
+            self.logger,
+            response,
+            f"Failed to fetch {target} in repository '{self._repository}'",
+        )
 
     self.logger.debug(
         f"Named graph '{graph_iri_str}' fetched successfully!"
@@ -62,7 +79,7 @@ def fetch_statements(
     return g
 
 
-def import_statements(
+def graph_add(
     self: "GraphDB",
     content: str,
     overwrite: Optional[bool] = False,
@@ -75,6 +92,10 @@ def import_statements(
     Sends content to the RDF4J Graph Store endpoint using POST (append) or PUT
     (overwrite). When `graph_iri` is None, the default graph is targeted.
 
+    A normal return means that the store accepted the import. Any other answer raises. A store
+    with SHACL validation can refuse an import, because the data would violate a shape. It then
+    imports nothing.
+
     Args:
         content (str): RDF content to import.
         overwrite (Optional[bool]): Use PUT to overwrite existing content. Defaults to False.
@@ -83,10 +104,19 @@ def import_statements(
             Defaults to 'application/x-turtle'.
 
     Returns:
-        bool: True on success (HTTP 204), False otherwise.
+        bool: True on success (HTTP 204). Any other answer raises.
 
     Raises:
-        requests.exceptions.RequestException: If the underlying HTTP request fails.
+        ShaclValidationError: If the store refused the import because the data would violate
+            a SHACL shape. Its `report` is the store's validation report. The refusal is
+            logged only at DEBUG; the caller decides how loud it is.
+        AuthenticationError: If the store answers 401, also after one new login.
+        TripleStoreAccessError: If the store answers 403.
+        TripleStoreResponseError: If the store answers with any other status than 204. It is
+            logged at ERROR, as are the two above. The message names the repository and the
+            graph.
+        TripleStoreUnavailableError: If the request gets no answer. The import is not sent
+            again.
     """
     graph_iri_str = str(IRI(graph_iri)) if graph_iri else None
     if graph_iri_str:
@@ -105,12 +135,18 @@ def import_statements(
     )
 
     if response.status_code != 204:
-        self.logger.warning(
-            f"Failed to import statements to named graph: {response.status_code} - {response.text}"
-            if graph_iri_str
-            else f"Failed to import statements to default graph: {response.status_code} - {response.text}"
+        # `query()`'s mapping of an error answer to a type. Imported here, not at the top:
+        # `graph_db` imports this module while it defines `GraphDB`.
+        from kapps_triplestore_interface.graph_db import (  # pylint: disable=import-outside-toplevel
+            _raise_error_answer,
         )
-        return False
+
+        target = f"graph <{graph_iri_str}>" if graph_iri_str else "the default graph"
+        _raise_error_answer(
+            self.logger,
+            response,
+            f"Failed to import into {target} in repository '{self._repository}'",
+        )
 
     self.logger.debug(
         f"Named graph {graph_iri_str} imported successfully!"
@@ -120,7 +156,7 @@ def import_statements(
     return True
 
 
-def clear_graph(
+def graph_clear(
     self: "GraphDB",
     graph_iri: Optional[GraphNameLike] = None,
 ) -> bool:
@@ -144,9 +180,13 @@ def clear_graph(
         ShaclValidationError: If the store refused the clear because the remaining data
             would violate a SHACL shape. Its `report` is the store's validation report. The
             refusal is logged only at DEBUG; the caller decides how loud it is.
-        GraphDbException: If the store answers with any other status than 204. It is
-            logged at ERROR. The message names the repository and the graph.
-        requests.exceptions.RequestException: If the underlying HTTP request fails.
+        AuthenticationError: If the store answers 401.
+        TripleStoreAccessError: If the store answers 403.
+        TripleStoreResponseError: If the store answers with any other status than 204. It is
+            logged at ERROR, as are the two above. The message names the repository and the
+            graph.
+        TripleStoreUnavailableError: If the request gets no answer. The clear is not sent
+            again.
     """
     graph_iri_str = str(IRI(graph_iri)) if graph_iri else None
     if graph_iri_str:
@@ -164,20 +204,15 @@ def clear_graph(
         # `query()`'s mapping of an error answer to a type. Imported here, not at the top:
         # `graph_db` imports this module while it defines `GraphDB`.
         from kapps_triplestore_interface.graph_db import (  # pylint: disable=import-outside-toplevel
-            _carries_validation_report,
+            _raise_error_answer,
         )
 
         target = f"graph <{graph_iri_str}>" if graph_iri_str else "the default graph"
-        message = (
-            f"Failed to clear {target} in repository '{self._repository}'"
-            f" ({response.status_code}) - {response.text}"
+        _raise_error_answer(
+            self.logger,
+            response,
+            f"Failed to clear {target} in repository '{self._repository}'",
         )
-        if _carries_validation_report(response):
-            # As in `query()`: the caller decides how loud a refusal is.
-            self.logger.debug(message)
-            raise ShaclValidationError(message, report=response.text)
-        self.logger.error(message)
-        raise GraphDbException(message)
 
     self.logger.debug(
         f"Named graph {graph_iri_str} cleared successfully!"
@@ -185,3 +220,39 @@ def clear_graph(
         else "Default graph cleared successfully!"
     )
     return True
+
+
+# The deprecated names. Each call emits one `DeprecationWarning` that names the successor, and
+# then runs the successor: the behaviour lives in one function.
+
+
+@_deprecation.renamed("graph_get")
+def fetch_statements(
+    self: "GraphDB",
+    graph_iri: Optional[GraphNameLike] = None,
+) -> Graph:
+    """The deprecated name of `graph_get`."""
+    return self.graph_get(graph_iri)
+
+
+@_deprecation.renamed("graph_add")
+def import_statements(
+    self: "GraphDB",
+    content: str,
+    overwrite: Optional[bool] = False,
+    graph_iri: Optional[GraphNameLike] = None,
+    content_type: Optional[str] = "application/x-turtle",
+) -> bool:
+    """The deprecated name of `graph_add`."""
+    return self.graph_add(
+        content, overwrite=overwrite, graph_iri=graph_iri, content_type=content_type
+    )
+
+
+@_deprecation.renamed("graph_clear")
+def clear_graph(
+    self: "GraphDB",
+    graph_iri: Optional[GraphNameLike] = None,
+) -> bool:
+    """The deprecated name of `graph_clear`."""
+    return self.graph_clear(graph_iri)

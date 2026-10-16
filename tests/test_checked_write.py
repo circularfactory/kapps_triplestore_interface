@@ -19,9 +19,9 @@ from kapps_triplestore_interface import (
     SPARQLQuery,
 )
 from kapps_triplestore_interface.exceptions import (
-    GraphDbException,
     InvalidInputError,
     TripleStoreInterfaceError,
+    TripleStoreResponseError,
 )
 from kapps_triplestore_interface.queries.checked_write import (
     DEFAULT_GRAPH,
@@ -53,7 +53,9 @@ class StubStore:
         if update:
             index = sum(1 for _, u in self.requests if u) - 1
             if self.fail_update_at == index:
-                raise GraphDbException("Error while querying GraphDB (500) - stub")
+                raise TripleStoreResponseError(
+                    "Error while querying GraphDB (500) - stub"
+                )
             return True
         return {"head": {}, "boolean": self.found}
 
@@ -224,7 +226,7 @@ def test_a_failed_write_propagates_and_asks_nothing(stub_db, store, write):
     call, _ = WRITES[write]
     store.fail_update_at = 0
 
-    with pytest.raises(GraphDbException):
+    with pytest.raises(TripleStoreResponseError):
         call(stub_db, None)
 
     assert len(store.requests) == 1
@@ -388,7 +390,7 @@ def test_each_write_has_its_own_receipt(stub_db, store):
 
 def test_the_error_type():
     assert issubclass(PreconditionFailedError, TripleStoreInterfaceError)
-    assert not issubclass(PreconditionFailedError, GraphDbException)
+    assert not issubclass(PreconditionFailedError, TripleStoreResponseError)
     error = PreconditionFailedError("m", triples=[OLD], named_graph=GRAPH)
     assert (error.message, error.triples, error.named_graph) == ("m", [OLD], GRAPH)
     assert str(error) == "m"

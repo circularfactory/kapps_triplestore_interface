@@ -2,10 +2,11 @@
 
 The remote GraphDB this was measured against closes a keep-alive connection that has been
 idle for 5 s. When the client's next request leaves on that connection just as the store
-closes it, the store reads nothing more and answers nothing, and the client gets
+closes it, the store reads nothing more and answers nothing, and the HTTP client raises
 `requests.ConnectionError` with
 `RemoteDisconnected('Remote end closed connection without response')`. Measured on
-2026-10-02: 9 of 16 reads failed at an idle time of 5.0 s, and none at 4.5 s or 6.0 s.
+2026-10-02: 9 of 16 reads failed at an idle time of 5.0 s, and none at 4.5 s or 6.0 s. The
+interface raises `TripleStoreUnavailableError`, chained to that error.
 
 These tests run without a triple store. A local HTTP server answers the few requests the
 client sends, over keep-alive connections. `expire_open_connections` marks every connection
@@ -26,8 +27,14 @@ from http.server import BaseHTTPRequestHandler
 
 import pytest
 import requests
+from rdflib import URIRef
 
-from kapps_triplestore_interface import GraphDB, GraphDBCredentials, IRI
+from kapps_triplestore_interface import (
+    IRI,
+    GraphDB,
+    GraphDBCredentials,
+    TripleStoreUnavailableError,
+)
 from kapps_triplestore_interface.queries.checked_write import RECEIPT_GRAPH
 
 REPOSITORY = "repo"
@@ -36,6 +43,9 @@ SUBJECT, PREDICATE, OBJECT = (
     IRI(f"http://example.org/idle#{name}") for name in ("s", "p", "o")
 )
 WRITE = f"INSERT DATA {{ {SUBJECT.n3()} {PREDICATE.n3()} {OBJECT.n3()} . }}"
+STATEMENT = f"{SUBJECT.n3()} {PREDICATE.n3()} {OBJECT.n3()} .\n"
+GRAPH = IRI("http://example.org/idle#graph")
+GRAPH_STORE_PATH_PREFIX = f"/repositories/{REPOSITORY}/rdf-graphs/service?"
 ANSWER = {
     "head": {"vars": ["s"]},
     "results": {
@@ -90,6 +100,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(200, b"", {"Authorization": "GDB token"})
         elif self.path == "/rest/repositories":
             self._send(200, json.dumps([{"id": REPOSITORY}]).encode("utf-8"))
+        elif self.path.startswith(f"/repositories/{REPOSITORY}/rdf-graphs/service?"):
+            self._send(200, STATEMENT.encode("utf-8"), content_type="text/plain")
         elif self.path == f"/repositories/{REPOSITORY}":
             self._send(200, json.dumps(ANSWER).encode("utf-8"))
         elif self.path == f"/repositories/{REPOSITORY}/statements":
@@ -97,12 +109,18 @@ class _Handler(BaseHTTPRequestHandler):
         else:
             self._send(404, b"")
 
-    def _send(self, status: int, body: bytes, headers: dict | None = None):
+    def _send(
+        self,
+        status: int,
+        body: bytes,
+        headers: dict | None = None,
+        content_type: str = "application/json",
+    ):
         self.send_response(status)
         for name, value in (headers or {}).items():
             self.send_header(name, value)
         if body:
-            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -213,9 +231,10 @@ def test_a_write_on_a_connection_the_store_closed_while_idle_raises_and_is_not_s
 ):
     store.expire_open_connections()
 
-    with pytest.raises(requests.ConnectionError) as failed:
+    with pytest.raises(TripleStoreUnavailableError) as failed:
         client.query(WRITE, update=True)
 
+    assert isinstance(failed.value.__cause__, requests.ConnectionError)
     assert "RemoteDisconnected" in str(failed.value)
     writes = store.requests_to(f"/repositories/{REPOSITORY}/statements")
     assert [(write.body, write.answered) for write in writes] == [(WRITE, False)]
@@ -231,7 +250,7 @@ def test_a_checked_write_on_a_connection_the_store_closed_while_idle_is_not_sent
     """
     store.expire_open_connections()
 
-    with pytest.raises(requests.ConnectionError):
+    with pytest.raises(TripleStoreUnavailableError):
         client.triples_add([(SUBJECT, PREDICATE, OBJECT)])
 
     writes = store.requests_to(f"/repositories/{REPOSITORY}/statements")
@@ -240,13 +259,91 @@ def test_a_checked_write_on_a_connection_the_store_closed_while_idle_is_not_sent
     assert store.requests_to(f"/repositories/{REPOSITORY}") == []
 
 
-def test_a_read_whose_retry_fails_as_well_raises_the_original_error_type(store, client):
+def test_a_read_whose_retry_fails_as_well_raises_unavailable(store, client):
     store.close_every_connection = True
 
-    with pytest.raises(requests.ConnectionError) as failed:
+    with pytest.raises(TripleStoreUnavailableError) as failed:
         client.query(READ)
 
-    assert type(failed.value) is requests.ConnectionError
+    assert type(failed.value.__cause__) is requests.ConnectionError
     assert "RemoteDisconnected" in str(failed.value)
     reads = store.requests_to(f"/repositories/{REPOSITORY}")
     assert [read.answered for read in reads] == [False, False]  # sent again once only
+
+
+def test_the_repository_list_on_a_connection_the_store_closed_while_idle_is_sent_again_once(
+    store, client
+):
+    store.expire_open_connections()
+
+    assert client.datasets_get(only_ids=True) == [REPOSITORY]
+
+    # The first listing is the constructor's.
+    lists = store.requests_to("/rest/repositories")
+    assert [listing.answered for listing in lists] == [True, False, True]
+    retry_reused_the_closed_connection = lists[2].connection == lists[1].connection
+    assert not retry_reused_the_closed_connection
+
+
+def test_graph_get_on_a_connection_the_store_closed_while_idle_is_sent_again_once(
+    store, client
+):
+    store.expire_open_connections()
+
+    graph = client.graph_get(GRAPH)
+
+    assert (URIRef(SUBJECT), URIRef(PREDICATE), URIRef(OBJECT)) in graph
+    fetches = [
+        received
+        for received in store.received
+        if received.path.startswith(GRAPH_STORE_PATH_PREFIX)
+    ]
+    assert [fetch.answered for fetch in fetches] == [False, True]
+    retry_reused_the_closed_connection = fetches[1].connection == fetches[0].connection
+    assert not retry_reused_the_closed_connection
+
+
+def test_a_read_outside_query_whose_retry_fails_as_well_is_sent_again_once_only(
+    store, client
+):
+    store.close_every_connection = True
+
+    with pytest.raises(TripleStoreUnavailableError):
+        client.datasets_get()
+    with pytest.raises(TripleStoreUnavailableError):
+        client.graph_get(GRAPH)
+
+    assert [r.answered for r in store.requests_to("/rest/repositories")][1:] == [
+        False,
+        False,
+    ]
+    fetches = [r for r in store.received if r.path.startswith(GRAPH_STORE_PATH_PREFIX)]
+    assert [fetch.answered for fetch in fetches] == [False, False]
+
+
+@pytest.mark.parametrize(
+    "read",
+    [
+        pytest.param(lambda db: db.datasets_get(), id="repository list"),
+        pytest.param(lambda db: db.graph_get(GRAPH), id="graph_get"),
+        pytest.param(lambda db: db.query(READ), id="query"),
+    ],
+)
+def test_a_refused_connection_raises_unavailable_with_no_second_send(
+    client, monkeypatch, read
+):
+    sends = []
+
+    def refuse(session, method, url, **kwargs):
+        sends.append(url)
+        raise requests.ConnectionError(
+            ConnectionRefusedError(111, "Connection refused")
+        )
+
+    monkeypatch.setattr(requests.Session, "request", refuse)
+
+    with pytest.raises(TripleStoreUnavailableError) as failed:
+        read(client)
+
+    assert isinstance(failed.value.__cause__, requests.ConnectionError)
+    assert len(sends) == 1

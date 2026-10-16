@@ -17,8 +17,8 @@ from kapps_triplestore_interface import (
     ShaclValidationError,
 )
 from kapps_triplestore_interface.exceptions import (
-    GraphDbException,
     TripleStoreInterfaceError,
+    TripleStoreResponseError,
 )
 
 # GraphDB 10.8.5's answer (KIT, 2026-10-04) to a clear of a named graph that held the only
@@ -99,13 +99,13 @@ def test_a_recorded_refusal_raises_the_shacl_type_with_the_report_verbatim(answe
     db = answering(_response(500, RECORDED_MEDIA_TYPE, RECORDED_REPORT))
 
     with pytest.raises(ShaclValidationError) as refused:
-        db.clear_graph(PARTS)
+        db.graph_clear(PARTS)
 
     assert refused.value.report == RECORDED_REPORT
     assert str(refused.value) == (
         f"Failed to clear graph <{PARTS}> in repository 'repo' (500) - {RECORDED_REPORT}"
     )
-    assert isinstance(refused.value, GraphDbException)
+    assert isinstance(refused.value, TripleStoreResponseError)
     assert isinstance(refused.value, TripleStoreInterfaceError)
 
 
@@ -115,7 +115,7 @@ def test_a_refusal_logs_the_report_at_debug_and_nothing_louder(answering, caplog
     caplog.clear()
 
     with caplog.at_level(logging.DEBUG), pytest.raises(ShaclValidationError):
-        db.clear_graph(PARTS)
+        db.graph_clear(PARTS)
 
     assert [
         (record.levelname, record.getMessage())
@@ -168,10 +168,11 @@ def test_every_other_error_answer_raises_the_general_type(
 ):
     db = answering(_response(status, media_type, body))
 
-    with pytest.raises(GraphDbException) as failed:
-        db.clear_graph(graph)
+    with pytest.raises(TripleStoreResponseError) as failed:
+        db.graph_clear(graph)
 
-    assert type(failed.value) is GraphDbException
+    assert type(failed.value) is TripleStoreResponseError
+    assert failed.value.status == status
     assert str(failed.value) == (
         f"Failed to clear {target} in repository 'repo' ({status}) - {body}"
     )
@@ -185,8 +186,8 @@ def test_every_other_error_answer_logs_at_error(
     # The client logs at INFO when it is built. Only the records of the clear count.
     caplog.clear()
 
-    with caplog.at_level(logging.DEBUG), pytest.raises(GraphDbException):
-        db.clear_graph(graph)
+    with caplog.at_level(logging.DEBUG), pytest.raises(TripleStoreResponseError):
+        db.graph_clear(graph)
 
     assert [
         (record.levelname, record.getMessage())
@@ -210,7 +211,7 @@ def test_a_clear_the_store_accepts_returns_true(
 ):
     db = answering(_response(204, None, ""))
 
-    assert db.clear_graph(graph) is True
+    assert db.graph_clear(graph) is True
     assert clears == [(endpoint, params)]
 
 
@@ -258,14 +259,14 @@ def test_a_live_refusal_raises_the_shacl_type_and_clears_nothing(
     db: GraphDB, part_in_its_own_graph
 ):
     with pytest.raises(ShaclValidationError) as refused:
-        db.clear_graph(PARTS)
+        db.graph_clear(PARTS)
 
     report = refused.value.report
     assert "<http://www.w3.org/ns/shacl#ValidationReport>" in report
     assert f"<http://www.w3.org/ns/shacl#focusNode> <{THING}>" in report
     assert f"<http://www.w3.org/ns/shacl#resultPath> <{PART}>" in report
     assert str(refused.value).startswith(
-        f"Failed to clear graph <{PARTS}> in repository '{db.repository}' (500) - "
+        f"Failed to clear graph <{PARTS}> in repository '{db.dataset}' (500) - "
     )
-    parts = db.fetch_statements(PARTS)
+    parts = db.graph_get(PARTS)
     assert parts is not None and len(parts) == 1

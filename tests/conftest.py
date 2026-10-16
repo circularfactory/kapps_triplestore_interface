@@ -131,6 +131,6 @@ def db() -> GraphDB:
         "http://example.org/local_named_graph",
         "http://example.org/unknown_datatypes_graph",
     ]:
-        db.clear_graph(graph)
+        db.graph_clear(graph)
 
     return db

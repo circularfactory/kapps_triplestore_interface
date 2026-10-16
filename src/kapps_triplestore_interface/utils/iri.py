@@ -22,6 +22,10 @@ class IRI(URIRef):
     - Prefixes without fragments: `prefix:`
     - Full IRI with fragment: `http://example.org#Name`
     - Prefixes with fragments: `prefix:Name`
+    - URNs in the form `urn:<NID>:<NSS>` (RFC 8141), for example `urn:uuid:<uuid4>`.
+      The scheme is lower case, the NID has 2 to 32 letters, digits or hyphens and does not
+      start or end with a hyphen, and the NSS is not empty and can contain more `:`. At most
+      one `#` is allowed. The string is kept as it is.
 
     Validation supports:
 
@@ -45,6 +49,14 @@ class IRI(URIRef):
 
     # Valid schemes for full IRIs, end with '://'
     SCHEMES = {"http://", "https://"}
+
+    # A URN, `urn:<NID>:<NSS>` (RFC 8141 syntax). The NID has 2 to 32 letters, digits or
+    # hyphens and neither starts nor ends with a hyphen. The NSS is not empty, has no
+    # whitespace, no second '#' and none of the characters that no IRI can hold (<>"{}|\^`);
+    # it can contain ':'.
+    URN_PATTERN = re.compile(
+        r"""urn:[A-Za-z0-9](?:[A-Za-z0-9-]{0,30}[A-Za-z0-9]):[^\s#<>"{}|\\^`]+(?:#[^\s#<>"{}|\\^`]*)?"""
+    )
 
     # Patterns for lined encoding/decoding. Underscore must be first.
     LINED_PATTERN = [
@@ -303,6 +315,15 @@ class IRI(URIRef):
         # Direct prefix, without fragment
         if raw in prefixes:
             return prefixes[raw]
+
+        # URN. Checked before the rules that count ':', which a URN breaks by design. A
+        # registered prefix named `urn` keeps the `prefix:name` reading.
+        if raw.startswith("urn:") and "urn" not in prefixes:
+            if not IRI.URN_PATTERN.fullmatch(raw):
+                raise InvalidIRIError(
+                    f"Invalid IRI: malformed URN, expected 'urn:<NID>:<NSS>' ({value}, {base})"
+                )
+            return raw
 
         # Full IRI
         if any(raw.startswith(scheme) for scheme in IRI.SCHEMES):
