@@ -64,6 +64,7 @@ each, so that no code above the interface calls a vendor's endpoint for them:
 | `prefix_set(prefix, iri)` | Lets `prefix` stand for the namespace `iri`. A prefix that the dataset has already stands for `iri` afterwards. |
 | `prefix_delete(prefix)` | Removes `prefix`. Every other prefix stays. |
 | `shapes_set(data, content_type)` | Replaces the SHACL shapes that the store validates the dataset against with the document `data`, of the media type `content_type`, for example `text/turtle`. An empty document removes every shape. |
+| `validate(shapes, content_type)` | Validates the whole dataset against the shapes document `shapes`, of the media type `content_type`, and returns the store's validation report verbatim (Turtle on GraphDB). It never changes the dataset or its shapes. A store without whole-dataset validation raises `TripleStoreNotSupportedError`. |
 
 `""` is the empty prefix in each prefix operation. A failed operation raises; none returns a
 flag.
@@ -178,32 +179,38 @@ answer. They never return `None`.
 
 ## Running Tests
 
-The test suite expects a running GraphDB instance and uses a dedicated test repository.
+The test suite expects a running GraphDB instance and uses a dedicated test dataset. It builds its
+store with `connect()`, as an application does.
 
 Required environment variables for tests:
 
-- `GRAPHDB_URL`
-- `GRAPHDB_USERNAME`
-- `GRAPHDB_PASSWORD`
-- `GRAPHDB_TEST_REPOSITORY`
+- `TRIPLESTORE_URL`
+- `TRIPLESTORE_USERNAME`
+- `TRIPLESTORE_PASSWORD`
+- `TRIPLESTORE_TEST_DATASET`
 
 Example:
 
 ```bash
-export GRAPHDB_URL="http://localhost:7200"
-export GRAPHDB_USERNAME="admin"
-export GRAPHDB_PASSWORD="root"
-export GRAPHDB_TEST_REPOSITORY="test-repo"
+export TRIPLESTORE_URL="http://localhost:7200"
+export TRIPLESTORE_USERNAME="admin"
+export TRIPLESTORE_PASSWORD="root"
+export TRIPLESTORE_TEST_DATASET="test-repo"
 uv run pytest tests -v
 ```
 
-The test of `shapes_set` on a dataset without SHACL validation needs a second repository on the
-same store, created without SHACL validation, named by `GRAPHDB_TEST_REPOSITORY_WITHOUT_SHACL`.
-Without it, that test skips. The other tests of the shapes need SHACL validation in the test
-repository, and they leave it with no shapes.
+The suite wipes the dataset it connects to. It refuses a store that is neither on the local host
+nor a bare container alias, unless `TRIPLESTORE_ALLOW_DESTRUCTIVE=1` says that the target is
+disposable.
 
-Note: the suite reads its dataset from `GRAPHDB_TEST_REPOSITORY`. An application builds its
-store from `TRIPLESTORE_DATASET`, as in "Getting Started", and never from that variable.
+The test of `shapes_set` on a dataset without SHACL validation needs a second dataset on the
+same store, created without SHACL validation, named by `TRIPLESTORE_TEST_DATASET_WITHOUT_SHACL`.
+Without it, that test skips. The other tests of the shapes need SHACL validation in the test
+dataset, and they leave it with no shapes.
+
+The deprecated `GRAPHDB_*` names still work for the package, but the suite does not read them.
+An application builds its store from `TRIPLESTORE_DATASET`, as in "Getting Started"; the suite
+reads its dataset from `TRIPLESTORE_TEST_DATASET`.
 
 ## Contributing
 

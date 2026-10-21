@@ -12,7 +12,6 @@ from .utils.iri import IRI
 from .utils.utils import to_literal
 from .utils.processing import process_bindings_select
 from .utils.pretty_print import format_result
-from .kafka.kafka_manager import KafkaManager
 from .utils.xsd_typemap import XSDToPythonTypes, XSDToPythonMapper
 from .exceptions import (
     ShaclValidationError,
@@ -37,7 +36,6 @@ __all__ = [
     "to_literal",
     "process_bindings_select",
     "format_result",
-    "KafkaManager",
     "XSDToPythonTypes",
     "XSDToPythonMapper",
     "ShaclValidationError",

@@ -44,7 +44,8 @@ class TripleStore(Protocol):
       `triples_update`, `graph_add`, `graph_clear`, and `query` with `update=True`.
     - Names: `new_iri`.
     - The store's registries, which SPARQL does not cover: the dataset's prefixes,
-      `prefixes_get`, `prefix_set` and `prefix_delete`, and its SHACL shapes, `shapes_set`.
+      `prefixes_get`, `prefix_set` and `prefix_delete`, its SHACL shapes, `shapes_set`, and
+      the validation of the whole dataset against a shapes document, `validate`.
     - The store itself: its `dataset`, and `close`.
 
     A store that has no such registry raises `TripleStoreNotSupportedError` for its
@@ -214,6 +215,18 @@ class TripleStore(Protocol):
                 validates nothing.
         """
         raise TripleStoreNotSupportedError(_no_registry(self, "shapes_set", "shapes"))
+
+    def validate(self, shapes: str, content_type: str) -> str:
+        """Validate the whole dataset against `shapes` and return the store's report verbatim.
+
+        `shapes` is a SHACL shapes document of the media type `content_type`, for example
+        `text/turtle`. The report is the store's own answer, unchanged; on GraphDB it is Turtle.
+        It does not change the dataset or the shapes that the store validates writes against.
+
+        Raises:
+            TripleStoreNotSupportedError: If the store has no whole-dataset validation.
+        """
+        raise TripleStoreNotSupportedError(_no_registry(self, "validate", "validation"))
 
 
 def _no_registry(store: object, operation: str, registry: str) -> str:

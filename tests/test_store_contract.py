@@ -42,7 +42,7 @@ MEASURED = {
 }
 
 # The store registries: the operations that replace the use cases' calls past the interface.
-REGISTRIES = {"prefixes_get", "prefix_set", "prefix_delete", "shapes_set"}
+REGISTRIES = {"prefixes_get", "prefix_set", "prefix_delete", "shapes_set", "validate"}
 
 OPERATIONS = sorted((MEASURED | REGISTRIES) - {"dataset"})
 

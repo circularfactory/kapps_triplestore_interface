@@ -1,35 +1,43 @@
 """Shared pytest fixtures.
 
-This is an integration suite. 84 of its 107 tests drive a real GraphDB, because that is the
+This is an integration suite. Most of its tests drive a real GraphDB, because that is the
 thing this library exists to wrap and a mock of it would only assert that the mock was called.
-The development repository's CI provisions a disposable GraphDB for them, so all 107 run there.
-A checkout without a triple store runs the 23 tests that need none and skips the rest, which is
-a report of what was not run rather than a claim that it passed.
+CI provisions a disposable GraphDB for them, so the whole suite runs there. A checkout
+without a triple store runs the tests that need none and skips the rest, which is a report
+of what was not run rather than a claim that it passed.
 
-The four ``GRAPHDB_*`` variables below select the store. The suite wipes what it connects to,
-so they must not point at anything of value; CI points them at a repository it created empty
-inside the job and destroys with the job.
+The four ``TRIPLESTORE_*`` variables below select the store, and `db` builds it with
+``connect()`` and the GDB token, as an application does. The suite wipes what it connects to,
+so they must not point at anything of value; CI points them at a dataset it created empty
+inside the job and destroys with the job. The deprecated ``GRAPHDB_*`` names still work
+for the package, but the suite does not read them.
 
-That last sentence used to be the whole protection: an instruction, obeyed by habit. `db` now
-refuses any target it cannot tell is disposable. See ``is_disposable_target`` below for what
+An instruction to point them somewhere harmless is not protection. `db` refuses any target it
+cannot tell is disposable. See ``is_disposable_target`` below for what
 disposable means and for the one variable that overrides it.
 """
 
 import os
+from typing import cast
 from urllib.parse import urlsplit
 
 import pytest
-from kapps_triplestore_interface import GraphDB, GraphDBCredentials
+from kapps_triplestore_interface import (
+    GDBTokenAuth,
+    GraphDB,
+    TripleStoreEndpoint,
+    connect,
+)
 
 REQUIRED_ENV = (
-    "GRAPHDB_URL",
-    "GRAPHDB_USERNAME",
-    "GRAPHDB_PASSWORD",
-    "GRAPHDB_TEST_REPOSITORY",
+    "TRIPLESTORE_URL",
+    "TRIPLESTORE_USERNAME",
+    "TRIPLESTORE_PASSWORD",
+    "TRIPLESTORE_TEST_DATASET",
 )
 
 # A fixture that destroys data must be **told** its target is disposable rather than infer the
-# permission from a URL being set. `GRAPHDB_TEST_REPOSITORY` names the intent but asserts
+# permission from a URL being set. `TRIPLESTORE_TEST_DATASET` names the intent but asserts
 # nothing: it is an ordinary environment variable holding whatever the shell last exported, and
 # the fixture wiped whatever came back.
 #
@@ -43,17 +51,11 @@ REQUIRED_ENV = (
 #   The institute's shared store is the dotted name this matters for, and it is deliberately
 #   not written here: `tests/` ships, and check 4 in `scripts/release_checks.py` rejects a
 #   private host anywhere in the public tree. The tests use `example.org` for the same reason.
-# - **`GRAPHDB_ALLOW_DESTRUCTIVE=1` is set**, which is a person saying so in as many words.
-#
-# The opt-in is deliberately not named after any of the three variables on group
-# `circular_factory` (`GRAPHDB_USER`, `GRAPHDB_PASSWORD`, `GITHUB_CIRCULAR_FACTORY_TOKEN`). A
-# protected group variable outranks one declared in `.gitlab-ci.yml` and arrives only on
-# protected refs, which is exactly how a job passes every merge request and then fails the
-# moment it merges.
+# - **`TRIPLESTORE_ALLOW_DESTRUCTIVE=1` is set**, which is a person saying so in as many words.
 #
 # `kapps_ogm/tests/conftest.py` carries the same guard, deliberately duplicated: there is no
 # shared test package between these repositories, and a pointer cannot be imported.
-ALLOW_DESTRUCTIVE_ENV = "GRAPHDB_ALLOW_DESTRUCTIVE"
+ALLOW_DESTRUCTIVE_ENV = "TRIPLESTORE_ALLOW_DESTRUCTIVE"
 
 LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
@@ -81,8 +83,8 @@ def pytest_collection_modifyitems(items):
     sibling `kapps_ogm` describe a whole directory as mock-only while 28 of its tests reached a
     live store through an intermediate fixture.
 
-    ``-m "not live"`` then selects the tier that runs anywhere. Nothing in CI passes that flag:
-    CI has a triple store and runs the whole suite.
+    ``-m "not live"`` then selects the tier that runs anywhere. CI does not pass that
+    flag: it has a triple store and runs the whole suite.
     """
     for item in items:
         if "db" in item.fixturenames:
@@ -101,27 +103,28 @@ def db() -> GraphDB:
     if missing:
         pytest.skip(f"needs a reachable GraphDB; unset: {', '.join(missing)}")
 
-    url = os.getenv("GRAPHDB_URL")
+    url = os.getenv("TRIPLESTORE_URL")
     if not is_disposable_target(url) and os.getenv(ALLOW_DESTRUCTIVE_ENV) != "1":
         pytest.fail(
-            f"refusing to clear graphs in repository "
-            f"{os.getenv('GRAPHDB_TEST_REPOSITORY')!r} on {url!r}.\n"
+            f"refusing to clear graphs in dataset "
+            f"{os.getenv('TRIPLESTORE_TEST_DATASET')!r} on {url!r}.\n"
             "This fixture wipes the default context and three named graphs at session start, and "
             "that host is neither loopback nor a container alias, so nothing here can tell that "
             "it is disposable.\n"
-            "Point GRAPHDB_URL at a local GraphDB or a service alias, or set "
+            "Point TRIPLESTORE_URL at a local GraphDB or a service alias, or set "
             f"{ALLOW_DESTRUCTIVE_ENV}=1 to state that the target is disposable.",
             pytrace=False,
         )
 
-    credentials = GraphDBCredentials(
-        base_url=os.getenv("GRAPHDB_URL"),
-        username=os.getenv("GRAPHDB_USERNAME"),
-        password=os.getenv("GRAPHDB_PASSWORD"),
-        repository=os.getenv("GRAPHDB_TEST_REPOSITORY"),
+    db = cast(
+        GraphDB,
+        connect(
+            TripleStoreEndpoint(
+                url=url, dataset=os.environ["TRIPLESTORE_TEST_DATASET"]
+            ),
+            GDBTokenAuth.from_env(),
+        ),
     )
-
-    db = GraphDB(credentials=credentials)
 
     # `test_unknown_datatypes.py` writes into the third graph. A run that stops between a case's
     # setup and its teardown leaves a value there, and the next run would read two.
@@ -134,3 +137,16 @@ def db() -> GraphDB:
         db.graph_clear(graph)
 
     return db
+
+
+@pytest.fixture(scope="session")
+def store_settings(db: GraphDB) -> dict[str, str]:
+    """The URL, identity and dataset of the suite's store, read from the ``TRIPLESTORE_*``
+    variables, for the tests whose subject is a client built another way than `connect()`.
+    """
+    return {
+        "base_url": os.environ["TRIPLESTORE_URL"],
+        "username": os.environ["TRIPLESTORE_USERNAME"],
+        "password": os.environ["TRIPLESTORE_PASSWORD"],
+        "repository": os.environ["TRIPLESTORE_TEST_DATASET"],
+    }

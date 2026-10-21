@@ -83,3 +83,8 @@ uv.lock
 # Records the reviewed release tip. Written by one release script and read by the other;
 # it is state between two commands, never something to commit.
 .release-state.json
+
+# Local agent output: the orchestrator's run logs per task, and scratch notes. A build's
+# handoff and briefs under .claude/log/<ticket>/ stay trackable; only runs/ is machine output.
+.claude/log/*/runs/
+.scratch/

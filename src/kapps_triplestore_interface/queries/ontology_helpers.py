@@ -27,6 +27,8 @@ def iri_exists(
     """
     Check if an IRI exists as subject, predicate, or object.
 
+    With several positions asked, the IRI exists if it holds any one of them.
+
     Args:
         iri (IRILike): The IRI to check for existence.
         as_sub (Optional[bool]): If True, check existence as subject. Defaults to False.
@@ -55,17 +57,16 @@ def iri_exists(
     iri = IRI(iri)
     named_graph = IRI(named_graph) if named_graph is not None else self.named_graph
 
-    # Define potential query parts
-    where_clauses = []
+    # The chosen positions are alternatives: the IRI is known if it holds any of them.
+    patterns = []
     if as_sub:
-        where_clauses.append(f"{{{iri.n3()} ?p ?o . }}")
+        patterns.append(f"{{{iri.n3()} ?p ?o . }}")
     if as_pred:
-        where_clauses.append(f"{{?s {iri.n3()} ?o . }}")
+        patterns.append(f"{{?s {iri.n3()} ?o . }}")
     if as_obj:
-        where_clauses.append(f"{{?s ?p {iri.n3()} . }}")
-
+        patterns.append(f"{{?s ?p {iri.n3()} . }}")
     query = SPARQLQuery.ask(
-        where_clauses=where_clauses,
+        where_clauses=[" UNION ".join(patterns)],
         named_graph=named_graph,
         include_explicit=include_explicit,
         include_implicit=include_implicit,

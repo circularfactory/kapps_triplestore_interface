@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import List, NoReturn, Union, Optional, Dict
 from urllib.parse import quote
-from kapps_triplestore_interface.kafka.kafka_manager import KafkaManager
 import requests
 import logging
 import threading
@@ -175,7 +174,7 @@ class GraphDB:
     Build it from a `TripleStoreEndpoint` and an auth provider, `GDBTokenAuth` or `BasicAuth`.
     `connect()` builds it so and checks it; code above the interface types it as
     `TripleStore`. It provides methods for querying and updating data, manages
-    authentication, the dataset, a default named graph, and a Kafka connector manager.
+    authentication, the dataset, and a default named graph.
 
     Args:
         endpoint (TripleStoreEndpoint): The store's URL and dataset.
@@ -274,8 +273,6 @@ class GraphDB:
             self._repositories = self.datasets_get(only_ids=True)
             self.dataset = credentials.repository
             self.named_graph = named_graph
-
-        self.kafka_manager = KafkaManager(db=self)
 
         if credentials is not None:
             self.logger.info(
@@ -646,7 +643,7 @@ class GraphDB:
             update (Optional[bool]): If True, perform an update; otherwise perform a read query.
                 Defaults to False.
             convert_bindings (Optional[bool]): Whether to convert query result bindings to Python types.
-                Defaults to True.
+                Defaults to False.
 
         Returns:
             Union[Dict, bool]: If `update` is False, the parsed JSON result dict.
@@ -890,3 +887,51 @@ class GraphDB:
                 response,
                 f"Failed to set the SHACL shapes of repository '{self._repository}'",
             )
+
+    def validate(self, shapes: str, content_type: str) -> str:
+        """Validate the whole dataset against `shapes` and return the store's report verbatim.
+
+        `shapes` is a SHACL shapes document of the media type `content_type`, for example
+        `text/turtle`. One POST to GraphDB's validation endpoint,
+        `rest/repositories/<repository>/validate/text`, with `shapes` as the body and
+        `Accept: text/turtle`. The report's format is the store's: Turtle on GraphDB. The
+        adapter returns the answer's text unchanged; a conforming dataset gives a report with
+        `sh:conforms true`, and a violation is part of the report, not an error.
+
+        An empty document, or one of white space only, validates against no shapes, and the
+        report conforms.
+
+        This operation never changes the dataset, and never the shapes that the store
+        validates writes against. The dataset need not have SHACL validation turned on.
+
+        Raises:
+            InvalidDatasetError: If the store answers 404: the dataset does not exist.
+            AuthenticationError: If the store answers 401.
+            TripleStoreAccessError: If the store answers 403.
+            TripleStoreResponseError: If the store answers with any other error status, for
+                example to a document that it cannot parse. The message names the repository.
+            TripleStoreUnavailableError: If a request gets no answer.
+        """
+        response = self._make_request(
+            "post",
+            f"rest/repositories/{self._repository}/validate/text",
+            headers={"Content-Type": content_type, "Accept": "text/turtle"},
+            # GraphDB 10.8.5 answers 400 to a request with an empty body, but validates a
+            # document of white space against no shapes. An empty document is sent as a newline.
+            data=(shapes if shapes.strip() else "\n").encode("utf-8"),
+            retry_after_idle_close=True,
+        )
+        if response.status_code == 404:
+            message = (
+                f"The store at {self._endpoint.url} has no repository '{self._repository}'"
+                f" ({response.status_code}) - {response.text}"
+            )
+            self.logger.error(message)
+            raise InvalidDatasetError(message)
+        if not response.ok:
+            _raise_error_answer(
+                self.logger,
+                response,
+                f"Failed to validate repository '{self._repository}'",
+            )
+        return response.text

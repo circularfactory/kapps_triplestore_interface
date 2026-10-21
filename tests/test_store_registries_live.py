@@ -11,7 +11,7 @@ suite's store is configured, as in CI, and skips elsewhere.
   with no shapes and without the data that it wrote. The documents name every IRI in full and
   declare no prefix, so that loading them adds no prefix to the dataset.
 - **A dataset without SHACL validation.** One more dataset on the same store, created without
-  SHACL validation, named by `GRAPHDB_TEST_REPOSITORY_WITHOUT_SHACL`. Without it, that test
+  SHACL validation, named by `TRIPLESTORE_TEST_DATASET_WITHOUT_SHACL`. Without it, that test
   skips. The test writes nothing to it, unless the adapter fails to refuse.
 """
 
@@ -21,18 +21,21 @@ suite's store is configured, as in CI, and skips elsewhere.
 from __future__ import annotations
 
 import os
+import re
 import uuid
 
 import pytest
 
 from kapps_triplestore_interface import (
+    GDBTokenAuth,
     GraphDB,
-    GraphDBCredentials,
     ShaclValidationError,
+    TripleStoreEndpoint,
     TripleStoreNotSupportedError,
+    connect,
 )
 
-WITHOUT_SHACL_ENV = "GRAPHDB_TEST_REPOSITORY_WITHOUT_SHACL"
+WITHOUT_SHACL_ENV = "TRIPLESTORE_TEST_DATASET_WITHOUT_SHACL"
 
 EX = "http://example.org/store-registries#"
 SH = "http://www.w3.org/ns/shacl#"
@@ -183,14 +186,9 @@ def without_shacl(db: GraphDB) -> GraphDB:
         pytest.skip(
             f"needs a dataset without SHACL validation; unset: {WITHOUT_SHACL_ENV}"
         )
-    credentials = db._credentials
-    store = GraphDB(
-        credentials=GraphDBCredentials(
-            base_url=credentials.base_url,
-            username=credentials.username,
-            password=credentials.password,
-            repository=dataset,
-        )
+    store = connect(
+        TripleStoreEndpoint(url=os.environ["TRIPLESTORE_URL"], dataset=dataset),
+        GDBTokenAuth.from_env(),
     )
     yield store
     store.close()
@@ -219,3 +217,36 @@ def test_shapes_set_on_a_dataset_without_shacl_raises_and_writes_nothing(
         # Only if the adapter failed to refuse, and the graph held nothing before.
         if before == 0 and _shapes_graph_size(without_shacl) != 0:
             without_shacl.graph_clear(SHAPES_GRAPH)
+
+
+# -- validate ----------------------------------------------------------------------------------
+
+
+def test_validate_reports_the_violation_of_the_whole_dataset(db: GraphDB):
+    """Insert the violating data while no shape is set, then validate against the shapes.
+
+    With no shapes set, commit-time validation refuses nothing, so the violating statement
+    gets in. `validate` then checks the whole dataset against the given document and must not
+    change the dataset or the shapes.
+    """
+    db.shapes_set("", "text/turtle")
+    try:
+        _insert(db, f"<{ITEM}> a <{THING}> ; <{COLOUR}> <{EX}red> .")
+
+        report = db.validate(NO_COLOUR, "text/turtle")
+
+        assert "conforms" in report
+        assert re.search(r"sh:conforms\s+false|shacl#conforms>\s+false", report)
+        assert ITEM in report
+        # The shapes of the dataset are untouched: a write is still not refused.
+        assert _insert(db, f"<{ITEM}> <{PART}> <{EX}one> .")
+        assert db.query(f"ASK {{ <{ITEM}> <{COLOUR}> <{EX}red> }}")["boolean"]
+    finally:
+        db.query(f"DELETE WHERE {{ <{ITEM}> ?p ?o . }}", update=True)
+        db.shapes_set("", "text/turtle")
+
+
+def test_validate_with_an_empty_document_returns_a_conforming_report(db: GraphDB):
+    report = db.validate("", "text/turtle")
+
+    assert re.search(r"sh:conforms\s+true|shacl#conforms>\s+true", report)

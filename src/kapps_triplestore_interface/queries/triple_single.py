@@ -75,7 +75,8 @@ def triple_add(
         named_graph (Optional[GraphNameLike]): Override the client's default named graph.
 
     Returns:
-        bool: True if the triple was inserted, False otherwise.
+        bool: True once the store admitted the insert. A refused or failed write raises; the
+        function never returns False.
     """
     triple = utils.sanitize_triple(triple)
     named_graph = IRI(named_graph) if named_graph is not None else self.named_graph
@@ -84,12 +85,7 @@ def triple_add(
         triples=[triple],
         named_graph=named_graph,
     )
-    result = self.query(query=query, update=True)
-    if not result:
-        self.logger.warning(
-            f"Failed to insert triple: ({utils.triple_to_string(triple)}) named_graph: {named_graph or "default"}, repository: {self._repository}"
-        )
-        return False
+    self.query(query=query, update=True)
 
     self.logger.debug(
         f"Successfully inserted triple: ({utils.triple_to_string(triple)}) named_graph: {named_graph or "default"}, repository: {self._repository}"

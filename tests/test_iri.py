@@ -205,8 +205,6 @@ def test_prefix_management():
             "owl",
             "rdf",
             "rdfs",
-            "kafka",
-            "kafka-inst",
         ]
     )
     initial_count = len(initial_prefixes)
@@ -256,8 +254,6 @@ def test_prefix_management():
             "owl",
             "rdf",
             "rdfs",
-            "kafka",
-            "kafka-inst",
         ]
     )
 
@@ -333,3 +329,9 @@ def test_lined():
     assert iri2_reconstructed == iri2
     assert iri3_reconstructed == iri3
     assert iri4_reconstructed == iri4
+
+
+def test_prefix_registry_names_no_vendor_prefix():
+    prefixes = IRI.get_prefixes()
+    assert not any("ontotext" in ns for ns in prefixes.values())
+    assert not any("kafka" in name for name in prefixes)

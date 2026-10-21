@@ -1,5 +1,63 @@
 # Changelog
 
+## 2.2.2 — 2026-10-20
+
+### Added
+
+- **`validate(shapes, content_type)` joins the store contract and the GraphDB adapter**
+  (`TripleStore` and `GraphDB`, with the store registries). It validates the whole dataset
+  against a shapes document through the store's validation endpoint and returns the store's
+  report verbatim, Turtle on GraphDB. A violation is part of the report, not an error. The call
+  changes neither the dataset nor the shapes that the store validates writes against. A 404
+  raises `InvalidDatasetError`, a 401 `AuthenticationError` and a 403 `TripleStoreAccessError`;
+  a store without whole-dataset validation raises `TripleStoreNotSupportedError`, as the other
+  registry operations do.
+
+### Changed
+
+- **The test suite builds its store with `connect()` and reads only the `TRIPLESTORE_*`
+  variables** (tests only). The dataset comes from `TRIPLESTORE_TEST_DATASET`, the dataset
+  without SHACL validation from `TRIPLESTORE_TEST_DATASET_WITHOUT_SHACL`, and the override of
+  the guard against a store that is not disposable is `TRIPLESTORE_ALLOW_DESTRUCTIVE`. The
+  tests of the deprecated `GraphDBCredentials` build them from the same variables themselves.
+  A live test records what the store does with a SHACL-SPARQL constraint: a class-targeted
+  constraint refuses a write at commit only when the write creates the focus node together
+  with the violation, and whole-dataset validation finds the violations that a later change
+  admits.
+
+### Fixed
+
+- **`iri_exists` finds an IRI that holds any of the asked positions**
+  (`kapps_triplestore_interface/queries/ontology_helpers.py`). With several of `as_sub`,
+  `as_pred` and `as_obj`, the read put the patterns side by side, which SPARQL joins: the IRI
+  had to hold every chosen position at once. An instance IRI is never a predicate, so a read
+  for all three positions always answered `False`, against the docstring ("subject, predicate,
+  or object"). The positions are now alternatives (`{ <I> ?p ?o } UNION { ?s <I> ?o } UNION
+  { ?s ?p <I> }`, in the one graph block, so the named graph and the scope options apply to
+  all). A read with one position sends the same query as before; a read without a position is
+  still refused. Two effects follow. An OGM paired with this interface needs a matching
+  change in its validator (a `kapps_ogm` release that adopts this interface): its validator asks all three positions and
+  then tests subclass-of. Before this fix that read answered `False` for every instance; now
+  it finds the instance, so an OGM without the change would refuse every existing instance.
+  `new_iri` keeps its read of all three positions, which is now correct: it retries an IRI
+  that is already in use.
+
+- **Stale docstrings and metadata are corrected.** `triple_add` lost a failure branch that
+  could not be reached; it returns `True` or raises, and its docstring says so. The docstring of
+  `query` gives the real default of `convert_bindings`, `False`. The `live` marker text and the
+  test conftest no longer quote test counts or name the private CI group. Both XSD maps say why
+  they differ: `XSDToPythonTypes` names the Python type of a value, so `xsd:anyURI` stays an
+  `IRI` there, and `XSDToPythonMapper` converts the lexical form and keeps it a string.
+
+### Removed
+
+- **`KafkaManager` goes without a deprecated alias, and so do the `kafka` and `kafka-inst`
+  IRI prefixes.** The Kafka connector manager (`GraphDB.kafka_manager`, the
+  `kapps_triplestore_interface.kafka` package, the export and its reference page) is removed.
+  No alias ships because every method of the class raised on its first use, so no caller can
+  depend on it, and a vendor-specific component has no place above the store contract. The IRI
+  prefix registry now names no vendor namespace.
+
 ## 2.2.1 — 2026-10-16
 
 ### Added

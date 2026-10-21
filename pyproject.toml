@@ -18,7 +18,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kapps-triplestore-interface"
-version = "2.2.1"
+version = "2.2.2"
 description = "SPARQL queries and atomic updates against a GraphDB triplestore, as callable Python methods."
 readme = "README.md"
 requires-python = ">=3.12,<4.0"
@@ -128,7 +128,7 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v --strict-markers"
 markers = [
-    "live: needs a reachable GraphDB (the GRAPHDB_* environment variables). Applied automatically to every test that requests the `db` fixture, directly or through another fixture, so it cannot drift out of step with what a test needs. `-m 'not live'` selects the tier that runs without a triple store: 23 of 107 tests. That tier is for a laptop, not for CI -- CI provisions a disposable GraphDB and runs all 107, because a green tick standing for 21% of this suite would be worse than a red one.",
+    "live: needs a reachable GraphDB (the TRIPLESTORE_* environment variables). Applied automatically to every test that requests the `db` fixture, directly or through another fixture, so it cannot drift out of step with what a test needs. `-m 'not live'` selects the tier that runs without a triple store. That tier is for a laptop, not for CI -- CI provisions a disposable GraphDB and runs the whole suite, because a green tick standing for a small part of this suite would be worse than a red one.",
 ]
 log_cli = "true"
 log_cli_level = "info"

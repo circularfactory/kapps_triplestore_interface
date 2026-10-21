@@ -31,6 +31,7 @@ import pytest
 
 from kapps_triplestore_interface import (
     BasicAuth,
+    AuthenticationError,
     GraphDB,
     ShaclValidationError,
     TripleStore,
@@ -39,6 +40,7 @@ from kapps_triplestore_interface import (
     TripleStoreNotSupportedError,
     TripleStoreResponseError,
 )
+from kapps_triplestore_interface.exceptions import InvalidDatasetError
 from kapps_triplestore_interface.graph_db import _shacl_validation_on
 from tests._stub_store import (  # pylint: disable=unused-import
     BASE_URL,
@@ -390,8 +392,9 @@ REGISTRY_OPERATIONS = pytest.mark.parametrize(
         lambda db: db.prefix_set("ex", EX),
         lambda db: db.prefix_delete("ex"),
         lambda db: db.shapes_set(SHAPES, "text/turtle"),
+        lambda db: db.validate(SHAPES, "text/turtle"),
     ],
-    ids=["prefixes_get", "prefix_set", "prefix_delete", "shapes_set"],
+    ids=["prefixes_get", "prefix_set", "prefix_delete", "shapes_set", "validate"],
 )
 
 
@@ -402,3 +405,51 @@ def test_an_adapter_without_the_registries_raises_not_supported(operation):
         operation(_StoreWithoutRegistries())
 
     assert "_StoreWithoutRegistries" in str(refused.value)
+
+
+# -- validate ----------------------------------------------------------------------------------
+
+VALIDATE = f"/rest/repositories/{DATASET}/validate/text"
+REPORT = """@prefix sh: <http://www.w3.org/ns/shacl#> .
+[] a sh:ValidationReport ;
+    sh:conforms false ;
+    sh:result [ a sh:ValidationResult ; sh:focusNode <http://example.org/registry#item> ] .
+"""
+
+
+def test_validate_returns_the_recorded_report_unchanged(store, adapter):
+    store.answers[VALIDATE] = answer(200, REPORT, "text/turtle")
+
+    assert adapter.validate(SHAPES, "text/turtle") == REPORT
+
+    assert [(m, p) for m, p, _ in store.sent] == [("POST", VALIDATE)]
+    assert store.bodies == [SHAPES.encode()]
+    assert store.headers[0]["Content-Type"] == "text/turtle"
+    assert store.headers[0]["Accept"] == "text/turtle"
+
+
+def test_validate_maps_a_404_to_an_invalid_dataset(store, adapter):
+    store.answers[VALIDATE] = answer(404, BODY)
+
+    with pytest.raises(InvalidDatasetError) as failed:
+        adapter.validate(SHAPES, "text/turtle")
+
+    assert f"'{DATASET}'" in str(failed.value)
+
+
+def test_validate_maps_a_401_to_an_authentication_error(store, adapter):
+    store.answers[VALIDATE] = answer(401, BODY)
+
+    with pytest.raises(AuthenticationError) as failed:
+        adapter.validate(SHAPES, "text/turtle")
+
+    assert failed.value.status == 401
+
+
+def test_validate_sends_an_empty_document_as_white_space(store, adapter):
+    """GraphDB answers 400 to an empty body, so the adapter sends a newline instead."""
+    store.answers[VALIDATE] = answer(200, REPORT, "text/turtle")
+
+    assert adapter.validate("", "text/turtle") == REPORT
+
+    assert store.bodies == [b"\n"]

@@ -1,6 +1,6 @@
 # API reference
 
-Generated from the source by `sphinx.ext.autodoc`, one page per public module (19 modules).
+Generated from the source by `sphinx.ext.autodoc`, one page per public module (18 modules).
 Members without a docstring are listed too, with their signatures. Deprecated names are left
 out; the changelog lists them.
 
@@ -43,11 +43,4 @@ utils/processing
 utils/types
 utils/utils
 utils/xsd_typemap
-```
-
-```{toctree}
-:caption: Kafka
-:maxdepth: 1
-
-kafka/kafka_manager
 ```

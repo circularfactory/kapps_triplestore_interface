@@ -16,7 +16,9 @@ import rdflib.plugins.sparql
 from rdflib import Dataset, Literal, URIRef, XSD
 
 from kapps_triplestore_interface import GraphDB, GraphDBCredentials, to_literal
+from kapps_triplestore_interface import XSDToPythonMapper, XSDToPythonTypes
 from kapps_triplestore_interface.utils import utils
+from kapps_triplestore_interface.utils.iri import IRI
 
 GRAPH = URIRef("http://example.org/services")
 SERVICE = URIRef("http://example.org/services#detector")
@@ -125,6 +127,21 @@ def test_an_any_uri_value_reads_back_as_the_typed_literal(value):
     assert isinstance(converted, Literal)
     assert converted == _any_uri(value)
     assert str(converted) == value
+
+
+def test_the_type_map_types_an_any_uri_value_and_the_mapper_keeps_a_literal_a_string():
+    any_uri = IRI("anyURI", str(XSD))
+    # XSDToPythonTypes gives the Python type of a value of the datatype: an xsd:anyURI value
+    # is an IRI.
+    assert XSDToPythonTypes[any_uri] is IRI
+    # So a `uri` binding equal to xsd:anyURI converts to that type, which callers such as the
+    # OGM use to type a property's range.
+    assert (
+        utils.convert_binding_to_python_type({"type": "uri", "value": str(XSD.anyURI)})
+        is IRI
+    )
+    # XSDToPythonMapper converts a literal's lexical form and keeps an anyURI literal a string.
+    assert XSDToPythonMapper[URIRef(str(XSD.anyURI))] is None
 
 
 @pytest.mark.parametrize("value", [WITH_SLASH, MQTT], ids=["http", "mqtt"])

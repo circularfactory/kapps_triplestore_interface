@@ -16,7 +16,8 @@ XSDToPythonMapper: Dict[IRI, Optional[Callable[[str], Any]]] = {
     URIRef(_XSD_PFX + "language"): str,
     # No converter: an xsd:anyURI value stays a Literal with its datatype, so a write of the
     # value names the stored literal again. An IRI would drop a trailing slash and would
-    # refuse a scheme other than http(s), for example mqtt.
+    # refuse a scheme other than http(s), for example mqtt. XSDToPythonTypes differs on purpose:
+    # it names the Python type of a value of the datatype.
     URIRef(_XSD_PFX + "anyURI"): None,
     URIRef(_XSD_PFX + "decimal"): float,
     URIRef(_RDF_XMLLITERAL): str,
@@ -56,6 +57,8 @@ XSDToPythonTypes: Dict[IRI, type] = {
     IRI("float", _XSD_PFX): float,
     IRI("double", _XSD_PFX): float,
     IRI("base64Binary", _XSD_PFX): bytes,
+    # The Python type of a value of the datatype: an xsd:anyURI value is an IRI. This differs
+    # from XSDToPythonMapper, which converts a literal's lexical form and keeps it a string.
     IRI("anyURI", _XSD_PFX): IRI,
     _RDF_XMLLITERAL: xml.dom.minidom.Document,
 }

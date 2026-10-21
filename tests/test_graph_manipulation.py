@@ -379,7 +379,8 @@ def test_iri_exists(db: GraphDB, named_graph: str):
         as_pred=True,
         named_graph=named_graph,
     )
-    assert result is False
+    # the positions are alternatives: a subject is found when asked as subject or predicate
+    assert result is True
 
     result = db.iri_exists(
         PRED_1,

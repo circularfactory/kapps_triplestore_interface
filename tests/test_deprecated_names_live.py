@@ -3,9 +3,9 @@
 The test requests the `db` fixture, so it is in the `live` tier: it runs where the suite's store
 is configured, as in CI, and skips elsewhere. `test_deprecated_names.py` covers the same names
 without a store. The other tests of the suite call the renamed operations, the attribute and
-the error by their new names. The suite's `db` fixture, and the tests whose subject is a client
-built from credentials, still build it from `GraphDBCredentials`, until the suite moves to the
-`TRIPLESTORE_*` variables.
+the error by their new names. The suite's `db` fixture builds its store with `connect()`; the
+`GraphDBCredentials` here are built from the `TRIPLESTORE_*` variables, explicitly, because that
+construction is what the test is about.
 """
 
 from __future__ import annotations
@@ -44,7 +44,9 @@ def _graph(db: GraphDB):
     db.graph_clear(GRAPH)
 
 
-def test_each_old_name_still_works_against_the_store_and_warns_once(db, graph):
+def test_each_old_name_still_works_against_the_store_and_warns_once(
+    db, graph, store_settings
+):
     added = _once(
         lambda: db.import_statements(STATEMENT, graph_iri=graph),
         "import_statements",
@@ -81,9 +83,9 @@ def test_each_old_name_still_works_against_the_store_and_warns_once(db, graph):
         "TripleStoreEndpoint",
     )
     credentials = credentials_type(
-        base_url=db._credentials.base_url,
-        username=db._credentials.username,
-        password=db._credentials.password,
+        base_url=store_settings["base_url"],
+        username=store_settings["username"],
+        password=store_settings["password"],
         repository=db.dataset,
     )
     # GDB token, the mode of the stores that this suite runs against: Basic authentication
@@ -106,9 +108,9 @@ def test_each_old_name_still_works_against_the_store_and_warns_once(db, graph):
     with pytest.raises(missing_type):
         GraphDB(
             credentials=credentials_type(
-                base_url=db._credentials.base_url,
-                username=db._credentials.username,
-                password=db._credentials.password,
+                base_url=store_settings["base_url"],
+                username=store_settings["username"],
+                password=store_settings["password"],
                 repository="deprecated-names-no-such-dataset",
             )
         )
