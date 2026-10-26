@@ -18,7 +18,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kapps-triplestore-interface"
-version = "2.2.2"
+version = "2.2.3"
 description = "SPARQL queries and atomic updates against a GraphDB triplestore, as callable Python methods."
 readme = "README.md"
 requires-python = ">=3.12,<4.0"

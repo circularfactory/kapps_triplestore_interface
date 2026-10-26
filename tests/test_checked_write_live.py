@@ -5,6 +5,11 @@ Every test starts from an empty default graph, an empty test graph and an empty 
 graph, with one schema triple, `x:p1 rdfs:subPropertyOf x:q`, so that `s x:p1 o` makes
 `s x:q o` inferred. The store's explicit statements are read from the statements endpoint
 with `infer=false`, so that a check of "nothing was written" covers every graph.
+
+The receipt of an applied write stays in the store until the client's next checked write or
+`close()` removes it. A check that no receipt is left first removes the receipts that the
+client still has to remove (`_settled_receipts`), so that it proves that their removal works
+and that no receipt is lost.
 """
 
 import json
@@ -16,7 +21,11 @@ import pytest
 from rdflib import BNode, Literal, URIRef
 
 from kapps_triplestore_interface import GraphDB, IRI, PreconditionFailedError
-from kapps_triplestore_interface.queries.checked_write import RECEIPT_GRAPH
+from kapps_triplestore_interface.queries.checked_write import (
+    RECEIPT_GRAPH,
+    receipts_to_remove,
+    remove_receipts,
+)
 from kapps_triplestore_interface.utils import utils
 
 X = "http://example.org/checked#"
@@ -69,6 +78,13 @@ def _receipts(db: GraphDB) -> int:
     return len(_explicit(db, str(RECEIPT_GRAPH)))
 
 
+def _settled_receipts(db: GraphDB) -> int:
+    """The receipts left in the store once the client has removed those it still holds."""
+    remove_receipts(db)
+    assert len(receipts_to_remove(db)) == 0
+    return _receipts(db)
+
+
 def _seed(db: GraphDB, triples, graph: Optional[str]) -> None:
     assert db.triples_add(triples, check_exist=False, named_graph=graph) is True
 
@@ -109,7 +125,7 @@ def test_add_applies(store, graph):
     )
     assert _has(store, (A, R, Literal(1)), graph)
     assert _has(store, (A, R, Literal(2)), graph)
-    assert _receipts(store) == 0
+    assert _settled_receipts(store) == 0
 
 
 def test_delete_applies(store, graph):
@@ -119,7 +135,7 @@ def test_delete_applies(store, graph):
     )
     assert not _has(store, (A, R, Literal(1)), graph)
     assert not _has(store, (A, R, Literal(2)), graph)
-    assert _receipts(store) == 0
+    assert _settled_receipts(store) == 0
 
 
 def test_update_applies(store, graph):
@@ -132,14 +148,14 @@ def test_update_applies(store, graph):
     assert not _has(store, (A, R, Literal(1)), graph)
     assert _has(store, (A, R, Literal(2)), graph)
     assert _has(store, (B, R, Literal(3)), graph)
-    assert _receipts(store) == 0
+    assert _settled_receipts(store) == 0
 
 
 def test_single_delete_applies(store, graph):
     _seed(store, [(A, R, O)], graph)
     assert store.triple_delete((A, R, O), named_graph=graph) is True
     assert not _has(store, (A, R, O), graph)
-    assert _receipts(store) == 0
+    assert _settled_receipts(store) == 0
 
 
 def test_single_update_applies(store, graph):
@@ -147,7 +163,7 @@ def test_single_update_applies(store, graph):
     assert store.triple_update((A, R, O), new_obj=NEW, named_graph=graph) is True
     assert not _has(store, (A, R, O), graph)
     assert _has(store, (A, R, NEW), graph)
-    assert _receipts(store) == 0
+    assert _settled_receipts(store) == 0
 
 
 # --- a false precondition raises, writes nothing and leaves no receipt -----------------
@@ -158,7 +174,7 @@ def _refused(store, graph, call, named):
     with pytest.raises(PreconditionFailedError) as refused:
         call()
     assert _explicit(store) == before
-    assert _receipts(store) == 0
+    assert _settled_receipts(store) == 0
     assert refused.value.triples == [utils.sanitize_triple(t) for t in named]
     assert refused.value.named_graph == _expected_graph(graph)
 
@@ -255,7 +271,7 @@ def test_explicit_and_inferred_stays_visible_after_a_delete(store, graph):
 
     assert not _has(store, (A, Q, O), graph)
     assert _visible(store, (A, Q, O))
-    assert _receipts(store) == 0
+    assert _settled_receipts(store) == 0
 
 
 # --- absent_subjects -------------------------------------------------------------------
@@ -278,7 +294,7 @@ def test_an_existing_subject_raises(store, graph, write):
     with pytest.raises(PreconditionFailedError) as refused:
         call()
     assert _explicit(store) == before
-    assert _receipts(store) == 0
+    assert _settled_receipts(store) == 0
     assert refused.value.triples == [
         t if None in t else utils.sanitize_triple(t) for t in named
     ]
@@ -294,7 +310,7 @@ def test_a_forward_reference_does_not_raise(store, graph, write):
     else:
         assert store.triples_update([], new, named_graph=graph, absent_subjects=[A])
     assert _has(store, (A, R, NEW), graph)
-    assert _receipts(store) == 0
+    assert _settled_receipts(store) == 0
 
 
 def test_a_subject_in_another_graph_does_not_raise(store):
@@ -319,7 +335,7 @@ def test_update_with_old_triples_and_absent_subjects(store, graph):
             [(A, R, Literal(7))], new, named_graph=graph, absent_subjects=[NEW]
         )
     assert _explicit(store) == before
-    assert _receipts(store) == 0
+    assert _settled_receipts(store) == 0
 
     # both hold: applied
     assert store.triples_update(old, new, named_graph=graph, absent_subjects=[NEW])
@@ -343,7 +359,7 @@ def test_a_blank_node_structure_is_checked_as_one(store, graph):
     # a structure of which only one part matches (`a r _:x`) does not exist yet: applied
     other = BNode()
     assert store.triples_add([(A, R, other), (other, Q, Literal(2))], named_graph=graph)
-    assert _receipts(store) == 0
+    assert _settled_receipts(store) == 0
 
 
 def test_an_owl_intersection_adds_with_the_check(store, graph):
@@ -389,7 +405,7 @@ def test_an_unchecked_update_applies_only_on_a_match(store, graph):
         [(A, R, O)], [(A, R, NEW)], check_exist=False, named_graph=graph
     )
     assert not _has(store, (A, R, NEW), graph)
-    assert _receipts(store) == 0
+    assert _settled_receipts(store) == 0
 
 
 # --- concurrency -----------------------------------------------------------------------
@@ -445,7 +461,7 @@ def test_two_writers_on_the_same_old_triple(store, graph):
         counts[key] += 1
         rounds.append(applied)
 
-    assert _receipts(store) == 0
+    assert _settled_receipts(store) == 0
     report = {"graph": graph or "default", "rounds": ROUNDS, **counts}
     print(f"\nconcurrency: {json.dumps(report)}")
     path = os.getenv(CONCURRENCY_REPORT_ENV)
@@ -455,3 +471,19 @@ def test_two_writers_on_the_same_old_triple(store, graph):
 
     assert counts["both_raised"] == 0
     assert counts["one_applied"] + counts["both_applied"] == ROUNDS
+
+
+# --- the lifetime of a receipt ---------------------------------------------------------
+
+
+def test_n_writes_and_close_leave_the_receipt_graph_empty(store, graph):
+    """Each write removes the receipt before it; the last waits for `close()`."""
+    remove_receipts(store)
+    for value in range(5):
+        assert store.triples_add([(A, R, Literal(value))], named_graph=graph) is True
+        # only the receipt of this write is left: the write removed the one before it
+        assert _receipts(store) == 1
+        assert len(receipts_to_remove(store)) == 1
+    store.close()
+    assert _receipts(store) == 0
+    assert len(receipts_to_remove(store)) == 0

@@ -16,7 +16,11 @@ from kapps_triplestore_interface.exceptions import (
     TripleStoreInterfaceError,
     TripleStoreResponseError,
 )
-from kapps_triplestore_interface.queries.checked_write import RECEIPT_GRAPH
+from kapps_triplestore_interface.queries.checked_write import (
+    RECEIPT_GRAPH,
+    receipts_to_remove,
+    remove_receipts,
+)
 
 # GraphDB 10.8.1's answer to an update that a `sh:maxCount 1` shape refused.
 RECORDED_MEDIA_TYPE = "application/shacl-validation-report+n-quads;charset=UTF-8"
@@ -237,3 +241,38 @@ def test_a_live_refusal_of_a_checked_write_raises_the_type_and_leaves_no_receipt
 
     assert not db.query(f"ASK {{ <{THING}> <{PART}> <{TWO}> }}")["boolean"]
     assert _receipts(db) == receipts_before
+
+
+def _holds(db: GraphDB, receipt) -> bool:
+    return db.query(f"ASK {{ GRAPH <{RECEIPT_GRAPH}> {{ <{receipt}> ?p ?o }} }}")["boolean"]
+
+
+def test_a_live_refusal_keeps_the_earlier_receipt_and_the_next_write_removes_it(
+    db: GraphDB, at_most_one_part
+):
+    """The removal of the earlier receipt rides in the refused update, so the store rolls it
+    back with the write. The receipt stays to remove, and the next write removes it."""
+    elsewhere = f"{EX}elsewhere"
+    remove_receipts(db)
+    receipts_before = _receipts(db)
+    try:
+        assert db.triples_add([(elsewhere, PART, ONE)]) is True
+        (earlier,) = list(receipts_to_remove(db))
+        assert _holds(db, earlier)
+
+        with pytest.raises(ShaclValidationError):
+            db.triples_add([(THING, PART, TWO)])
+
+        assert not db.query(f"ASK {{ <{THING}> <{PART}> <{TWO}> }}")["boolean"]
+        assert _holds(db, earlier)
+        assert list(receipts_to_remove(db)) == [earlier]
+
+        assert db.triples_add([(elsewhere, PART, TWO)]) is True
+        assert not _holds(db, earlier)
+        (latest,) = list(receipts_to_remove(db))
+        assert latest != earlier and _holds(db, latest)
+
+        db.close()
+        assert _receipts(db) == receipts_before
+    finally:
+        db.query(f"DELETE WHERE {{ <{elsewhere}> ?p ?o . }}", update=True)

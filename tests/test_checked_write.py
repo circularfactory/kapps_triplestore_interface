@@ -1,12 +1,15 @@
 """Unit tests of the checked write, with `query` stubbed.
 
 They assert on the requests a write sends: the update with its precondition and its receipt,
-the `ASK` for the receipt, and the cleanup. What the store does with them is tested live in
+the `ASK` for the receipt, and the removal of the receipt, which rides at the end of the
+client's next checked write, or in `close()`. What the store does with them is tested live in
 `test_checked_write_live.py`.
 """
 
 import logging
 import re
+import threading
+from uuid import uuid4
 
 import pytest
 from rdflib import BNode, Literal, URIRef
@@ -20,21 +23,24 @@ from kapps_triplestore_interface import (
 )
 from kapps_triplestore_interface.exceptions import (
     InvalidInputError,
+    ShaclValidationError,
     TripleStoreInterfaceError,
     TripleStoreResponseError,
+    TripleStoreUnavailableError,
 )
 from kapps_triplestore_interface.queries.checked_write import (
     DEFAULT_GRAPH,
     RECEIPT_GRAPH,
     RECEIPT_PREDICATE,
+    receipts_to_remove,
 )
 from kapps_triplestore_interface.utils import utils
 
-S = IRI("https://example.org/s")
-S2 = IRI("https://example.org/s2")
-P = IRI("https://example.org/p")
-Q = IRI("https://example.org/q")
-GRAPH = IRI("https://example.org/graph")
+S = IRI("http://example.org/s")
+S2 = IRI("http://example.org/s2")
+P = IRI("http://example.org/p")
+Q = IRI("http://example.org/q")
+GRAPH = IRI("http://example.org/graph")
 
 RECEIPT_IRI = re.compile(r"<(urn:uuid:[0-9a-f-]{36})>")
 
@@ -73,6 +79,8 @@ def stub_db(store) -> GraphDB:
     db._named_graph = None
     db._repository = "stub"
     db._blank_ids = set()
+    db._sessions = []
+    db._sessions_lock = threading.Lock()
     db.query = store
     return db
 
@@ -169,18 +177,18 @@ def test_the_update_carries_the_receipt_and_the_precondition(
         assert "GRAPH" not in clauses.get("DELETE", "")
 
 
-def test_a_found_receipt_is_removed_and_the_write_returns_true(
+def test_a_found_receipt_is_kept_to_remove_and_the_write_returns_true(
     stub_db, store, write, graph
 ):
+    """Two requests: the update and the `ASK`. The receipt waits for the next request."""
     call, _ = WRITES[write]
     assert call(stub_db, graph) is True
 
-    assert [u for _, u in store.requests] == [True, False, True]
+    assert [u for _, u in store.requests] == [True, False]
     receipt = RECEIPT_IRI.search(store.requests[0][0]).group(1)
-    ask, cleanup = store.requests[1][0], store.requests[2][0]
+    ask = store.requests[1][0]
     assert ask.startswith("ASK") and f"<{receipt}>" in ask and RECEIPT_GRAPH.n3() in ask
-    assert cleanup.startswith("DELETE WHERE") and f"<{receipt}>" in cleanup
-    assert RECEIPT_GRAPH.n3() in cleanup
+    assert [str(r) for r in receipts_to_remove(stub_db)] == [receipt]
 
 
 def test_a_missing_receipt_raises_and_sends_no_cleanup(stub_db, store, write, graph):
@@ -206,20 +214,6 @@ def test_the_client_default_graph_is_the_target(stub_db, store, write):
 
     assert refused.value.named_graph == GRAPH
     assert _split(store.requests[0][0])["WITH"] == f"WITH {GRAPH.n3()}"
-
-
-def test_a_failed_cleanup_warns_and_returns_true(stub_db, store, write, caplog):
-    call, _ = WRITES[write]
-    store.fail_update_at = 1
-
-    with caplog.at_level(logging.WARNING, logger="stub"):
-        assert call(stub_db, None) is True
-
-    receipt = RECEIPT_IRI.search(store.requests[0][0]).group(1)
-    assert any(
-        record.levelno == logging.WARNING and receipt in record.getMessage()
-        for record in caplog.records
-    )
 
 
 def test_a_failed_write_propagates_and_asks_nothing(stub_db, store, write):
@@ -407,3 +401,263 @@ def test_the_receipt_names_carry_no_vendor_word():
     for value in (RECEIPT_GRAPH, RECEIPT_PREDICATE):
         assert isinstance(value, URIRef)
         assert not re.search(r"graphdb|ontotext|rdf4j", value, re.IGNORECASE)
+
+
+# --- the removal of a receipt rides in the next checked write ----------------------------
+
+REMOVAL = re.compile(
+    r"DELETE WHERE \{ GRAPH "
+    + re.escape(RECEIPT_GRAPH.n3())
+    + r" \{ <(urn:uuid:[0-9a-f-]{36})> \?p \?o \} \}"
+)
+
+
+def _operations(text: str) -> list:
+    """The operations of an update request, split at the `;` between them."""
+    return [part.strip() for part in re.split(r" ;\n", text)]
+
+
+def _written(text: str) -> str:
+    """The receipt that the first operation of an update request inserts."""
+    return RECEIPT_IRI.search(_split(_operations(text)[0])["INSERT"]).group(1)
+
+
+def _removed(text: str) -> list:
+    return REMOVAL.findall(text)
+
+
+class ReceiptStore(StubStore):
+    """A recording store that holds receipts: an update inserts its receipt and applies its
+    removals, and the `ASK` answers whether the receipt is there. Safe for several threads.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.lock = threading.Lock()
+        self.present = set()
+        self.inserted = []
+        self.removed = []
+
+    def __call__(self, query, update=False, **kwargs):
+        with self.lock:
+            answer = super().__call__(query, update, **kwargs)
+            text = self.requests[-1][0]
+            if update:
+                first = _operations(text)[0]
+                if RECEIPT_PREDICATE.n3() in first:
+                    receipt = RECEIPT_IRI.search(first).group(1)
+                    self.inserted.append(receipt)
+                    if self.found:
+                        self.present.add(receipt)
+                for receipt in _removed(text):
+                    self.removed.append(receipt)
+                    self.present.discard(receipt)
+                return answer
+            receipt = RECEIPT_IRI.search(text).group(1)
+            return {"head": {}, "boolean": receipt in self.present}
+
+
+@pytest.fixture
+def receipt_store() -> ReceiptStore:
+    return ReceiptStore()
+
+
+@pytest.fixture
+def receipt_db(stub_db, receipt_store) -> GraphDB:
+    stub_db.query = receipt_store
+    return stub_db
+
+
+N = 5
+
+
+def test_n_checked_writes_send_n_updates_and_n_asks_and_no_removal_of_their_own(
+    receipt_db, receipt_store, write, graph
+):
+    call, _ = WRITES[write]
+    for _ in range(N):
+        assert call(receipt_db, graph) is True
+
+    kinds = [u for _, u in receipt_store.requests]
+    assert kinds == [True, False] * N
+    for text, update in receipt_store.requests:
+        assert not text.lstrip().startswith("DELETE WHERE")
+        if update:
+            parseUpdate(text)
+
+
+def test_update_k_starts_with_its_own_update_and_ends_with_the_removal_of_receipt_k_1(
+    receipt_db, receipt_store, write, graph
+):
+    call, _ = WRITES[write]
+    for _ in range(N):
+        call(receipt_db, graph)
+
+    updates = [text for text, update in receipt_store.requests if update]
+    receipts = [_written(text) for text in updates]
+    assert len(set(receipts)) == N
+    assert _removed(updates[0]) == []
+    for k in range(1, N):
+        operations = _operations(updates[k])
+        # its own update first, as the request of a write on its own would be
+        assert RECEIPT_PREDICATE.n3() in operations[0]
+        assert not operations[0].startswith("DELETE WHERE")
+        assert REMOVAL.findall(operations[0]) == []
+        # and the removal of the previous receipt last, as an operation of its own
+        assert operations[1:] == [
+            f"DELETE WHERE {{ GRAPH {RECEIPT_GRAPH.n3()} {{ <{receipts[k - 1]}> ?p ?o }} }}"
+        ]
+    assert receipt_store.present == {receipts[-1]}
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        TripleStoreResponseError("Error while querying GraphDB (500) - stub"),
+        ShaclValidationError("refused", report="report"),
+        TripleStoreUnavailableError("No answer - stub"),
+    ],
+    ids=["error-status", "shacl-refusal", "no-answer"],
+)
+def test_a_refused_update_keeps_the_receipts_it_carried(
+    receipt_db, receipt_store, error
+):
+    receipt_db.triple_delete(OLD)
+    receipt_db.triple_delete(OLD)
+    first, second = (_written(t) for t, u in receipt_store.requests if u)
+
+    def refuse(query, update=False, **kwargs):
+        receipt_store.requests.append((query, update))
+        raise error
+
+    receipt_db.query = refuse
+    with pytest.raises(type(error)) as raised:
+        receipt_db.triple_delete(OLD)
+    assert raised.value is error
+    refused = receipt_store.requests[-1][0]
+    assert _removed(refused) == [second]
+
+    receipt_db.query = receipt_store
+    receipt_db.triple_delete(OLD)
+    again = [t for t, u in receipt_store.requests if u][-1]
+    assert _removed(again) == [second]
+    assert _written(again) not in (first, second)
+    assert receipt_store.present == {_written(again)}
+
+
+def test_a_false_precondition_raises_and_its_carried_removals_were_applied(
+    receipt_db, receipt_store
+):
+    receipt_db.triple_delete(OLD)
+    receipt_store.found = False
+
+    with pytest.raises(PreconditionFailedError):
+        receipt_db.triple_delete(OLD)
+
+    first = _written(receipt_store.requests[0][0])
+    assert _removed(receipt_store.requests[2][0]) == [first]
+    assert receipt_store.present == set()
+    assert len(receipts_to_remove(receipt_db)) == 0
+
+
+def test_a_failed_ask_propagates_and_keeps_no_receipt_to_remove(
+    receipt_db, receipt_store
+):
+    """As on `main`: the `ASK` error propagates, and the receipt stays for a sweep."""
+
+    def ask_fails(query, update=False, **kwargs):
+        if update:
+            return receipt_store(query, update, **kwargs)
+        raise TripleStoreUnavailableError("No answer - stub")
+
+    receipt_db.query = ask_fails
+    with pytest.raises(TripleStoreUnavailableError):
+        receipt_db.triple_delete(OLD)
+    assert len(receipts_to_remove(receipt_db)) == 0
+
+
+def test_checked_writes_from_several_threads_remove_every_receipt(
+    receipt_db, receipt_store
+):
+    threads, writes = 8, 25
+    barrier = threading.Barrier(threads)
+    errors = []
+
+    def writer():
+        barrier.wait()
+        try:
+            for _ in range(writes):
+                assert receipt_db.triple_delete(OLD) is True
+        except BaseException as error:  # reported below, never swallowed
+            errors.append(error)
+
+    workers = [threading.Thread(target=writer) for _ in range(threads)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=60)
+
+    assert errors == []
+    assert len(receipt_store.inserted) == threads * writes
+    receipt_db.close()
+    assert receipt_store.present == set()
+    assert sorted(receipt_store.removed) == sorted(receipt_store.inserted)
+
+
+def test_close_removes_every_receipt_still_to_remove_in_one_request(
+    receipt_db, receipt_store
+):
+    """Several receipts wait when writes of several threads overlap; one write leaves one."""
+    receipt_db.triple_delete(OLD)
+    others = [URIRef(f"urn:uuid:{uuid4()}") for _ in range(2)]
+    for receipt in others:
+        receipt_store.present.add(str(receipt))
+        receipts_to_remove(receipt_db).add(receipt)
+    held = set(receipt_store.present)
+    assert len(held) == 3
+    before = len(receipt_store.requests)
+
+    receipt_db.close()
+
+    sent = receipt_store.requests[before:]
+    assert len(sent) == 1
+    text, update = sent[0]
+    assert update and text.startswith("DELETE WHERE")
+    parseUpdate(text)
+    assert set(_removed(text)) == held and len(_operations(text)) == 3
+    assert receipt_store.present == set()
+
+    receipt_db.close()
+    assert len(receipt_store.requests) == before + 1
+
+
+def test_close_sends_nothing_when_there_is_no_receipt_to_remove(
+    receipt_db, receipt_store
+):
+    receipt_db.close()
+    assert receipt_store.requests == []
+
+
+def test_a_failed_removal_in_close_warns_keeps_the_receipts_and_closes_the_sessions(
+    receipt_db, receipt_store, caplog
+):
+    receipt_db.triple_delete(OLD)
+    receipt = _written(receipt_store.requests[0][0])
+    closed = []
+
+    class Session:
+        def close(self):
+            closed.append(self)
+
+    receipt_db._sessions = [Session()]
+    receipt_store.fail_update_at = 1
+
+    with caplog.at_level(logging.WARNING, logger="stub"):
+        receipt_db.close()
+
+    assert len(closed) == 1
+    assert [str(r) for r in receipts_to_remove(receipt_db)] == [receipt]
+    assert any(
+        record.levelno == logging.WARNING and receipt in record.getMessage()
+        for record in caplog.records
+    )

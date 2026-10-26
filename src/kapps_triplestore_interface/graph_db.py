@@ -15,6 +15,7 @@ from kapps_triplestore_interface.utils.graph_db_credentials import _GraphDBCrede
 from kapps_triplestore_interface.utils.iri import IRI
 from kapps_triplestore_interface.utils.types import GraphNameLike, GraphName
 from kapps_triplestore_interface.sparql_query import SPARQLQuery
+from kapps_triplestore_interface.queries import checked_write as _checked_write
 from kapps_triplestore_interface.exceptions import (
     InvalidDatasetError,
     AuthenticationError,
@@ -263,6 +264,11 @@ class GraphDB:
         self._thread_local = threading.local()
         self._sessions: list[requests.Session] = []
         self._sessions_lock = threading.Lock()
+
+        # The receipts of this client's checked writes whose `ASK` has found them, still to
+        # remove. The next checked write of any thread carries their removal, and `close()`
+        # removes the rest (`queries/checked_write.py`).
+        self._receipts_to_remove = _checked_write.ReceiptsToRemove()
 
         if credentials is None:
             # No request: the provider logs in at the first one.
@@ -590,6 +596,19 @@ class GraphDB:
         return session
 
     def close(self) -> None:
+        """Remove the receipts still to remove, then release the HTTP connection pools.
+
+        The receipts of the client's checked writes go in one update request, before the
+        sessions close; no request goes when there is none. A failure of that request is
+        logged as a warning and not raised: each receipt carries its time for a later sweep,
+        and the sessions close all the same.
+        """
+        try:
+            _checked_write.remove_receipts(self)
+        finally:
+            self._close_sessions()
+
+    def _close_sessions(self) -> None:
         """Release the HTTP connection pools held for every thread that used this client."""
         with self._sessions_lock:
             sessions, self._sessions = self._sessions, []
@@ -637,6 +656,15 @@ class GraphDB:
     ) -> Union[Dict, bool]:
         """
         Execute a SPARQL query or update against the repository.
+
+        What parses on the client depends on who built the query:
+
+        - The interface, for its own operations (`triples_get`, `triples_add`,
+          `iri_exists` and the like): sent as text, not parsed. It renders every term
+          itself, so a parse could find only a defect in its fixed template text.
+        - A caller, as a `SPARQLQuery`: parsed first, as before. A malformed query raises
+          `InvalidQueryError`.
+        - A caller, as a `str`: sent as it is, without a parse, as before.
 
         Args:
             query (Union[SPARQLQuery, str]): The SPARQL query/update string to execute.

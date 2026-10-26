@@ -1,5 +1,48 @@
 # Changelog
 
+## 2.2.3 — 2026-10-26
+
+### Changed
+
+- **A checked write sends two requests, not three: its receipt is removed in the client's next
+  checked write** (`kapps_triplestore_interface/queries/checked_write.py`, `GraphDB.close`).
+  A checked write (`triples_add`, `triples_delete`, `triples_update`, `triple_delete` and
+  `triple_update` with their precondition) sent its update, an `ASK` for its receipt and then a
+  removal of the receipt, a write transaction of its own. Now the client keeps each receipt
+  that its `ASK` found, behind a lock. The next checked write of any thread appends one
+  `DELETE WHERE` operation per receipt to its own update request, after its own update. The
+  store runs all operations of one update request in one transaction, so a commit costs one
+  write transaction, not two. If that request fails (a refusal, an error status, no answer),
+  the receipts it carried stay to remove. A false precondition raises
+  `PreconditionFailedError` as before; the removals that its request carried were applied.
+  `close()` removes the receipts still to remove in one request before it closes the
+  sessions, and sends none when there is none; if that request fails, it logs a warning and
+  closes the sessions all the same. A receipt that outlives its process keeps its time, for a
+  later sweep, as before. Every error of a checked write stays as it was.
+- **Every ontology namespace uses `http://`** (documentation, tests and the release probe only).
+  The IRI utilities' docstring examples, the release probe and the tests spell their namespaces
+  as every W3C ontology does. A test refuses an `https://` ontology namespace.
+- **The shipped text names the interface's real callers only** (documentation and tests only).
+  The store-contract section of the README and the `TripleStore` docstring name the
+  object-graph mapper and the middleware as the callers. A test keeps consumer names out of
+  the shipped text.
+- **The README says that the library never calls `shapes_set`** (documentation only). Where it
+  describes the shapes setter, it says that the setter is for a seed, a test or an operator,
+  and that a productive store already holds its shapes.
+- **The interface sends the queries of its own operations as text, without a parse of its
+  own** (patch release). `triples_get`, `owl_get_classes_of_individual`, `iri_exists`,
+  `any_triple_exists`, `all_triple_exists`, `triple_exists`, `triples_add`, `triples_delete`,
+  `triple_add`, `triple_delete` and `triple_update` render every term themselves, through the
+  triple sanitizer and `n3()`. Each now gives `query` the text from `to_string(validate=False)`.
+  So the parse (3.4-5 ms a read; an insert or delete first ran on an empty in-memory
+  dataset) is gone from them. The sent text is the same as before. The defaults, as the
+  docstring of `GraphDB.query` states them: a query that the interface builds for its own
+  operations is sent as text, not parsed; a caller's `SPARQLQuery` is parsed, as before, and a
+  malformed one raises `InvalidQueryError`; a caller's `str` is sent as it is, as before. A
+  malformed IRI still fails at `n3()`, before any request. One thing changes: a defect in one of
+  the interface's own templates now meets the store's answer 400 (`TripleStoreResponseError`)
+  instead of `InvalidQueryError`.
+
 ## 2.2.2 — 2026-10-20
 
 ### Added

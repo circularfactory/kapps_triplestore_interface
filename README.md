@@ -48,7 +48,7 @@ providers and the variables.
 ## The store contract
 
 Code above this interface types its store as `TripleStore`, which `connect()` returns. It
-declares the operations that the object-graph mapper, the middleware and the use cases call on
+declares the operations that the object-graph mapper and the middleware call on
 a store, measured in their code, and no other; its docstring lists them. The GraphDB adapter,
 `GraphDB`, implements each one. A test double satisfies the contract without inheriting from
 it.
@@ -81,6 +81,9 @@ configuration does not say. On a dataset with SHACL validation it replaces the s
 with `data` in one request, which the store applies whole or not at all. If the store refuses
 it, because the data of the dataset violates the new shapes, `shapes_set` raises
 `ShaclValidationError`, and the old shapes stay.
+
+The library never calls `shapes_set` itself. It is for a seed, a test or an operator: a
+productive store already holds its shapes.
 
 ## What a write promises
 
@@ -120,9 +123,15 @@ subject of a triple in the target graph. A subject that occurs only as an object
 - **`check_exist=False`** sends the write without a precondition and returns `True`. An
   unchecked update still applies only when its old triples match.
 - **The receipt.** A checked write also writes one receipt triple into the graph
-  `urn:x-kapps:write-receipts`, in the same update. The function reads the receipt and then
-  removes it. If the process stops between the write and the removal, the receipt stays, with
-  its time.
+  `urn:x-kapps:write-receipts`, in the same update. The function then reads the receipt: a
+  checked write sends two requests, the update and that read. When the read finds the receipt,
+  the client keeps it as a receipt to remove. The next checked write of the client, from any
+  thread, removes it: one `DELETE WHERE` operation per receipt, after its own update, in the
+  same update request. The store runs that request in one transaction. If the request fails,
+  the receipts that it carried stay to remove, and a later write removes them. `close()`
+  removes the receipts still to remove, in one request, before it closes the connections. If
+  that removal fails, `close()` logs a warning and closes the connections all the same. If the
+  process stops before a later write or `close()`, the receipt stays, with its time.
 - **A write that gets no answer** (for example a timeout, or a connection that the store
   closed) raises `TripleStoreUnavailableError`, chained to the error of the HTTP client. The
   write is not sent again, and its receipt is not read: the store can still commit the write

@@ -33,7 +33,7 @@ from kapps_triplestore_interface.utils.types import (
 class TripleStore(Protocol):
     """A store, as the layers above the interface use it.
 
-    It declares each operation that the object-graph mapper, the middleware and the use cases
+    It declares each operation that the object-graph mapper and the middleware
     call on a store, measured in their code, and no other. The GraphDB adapter, `GraphDB`,
     implements it; each operation is documented there. A test double implements it without
     inheriting from it.

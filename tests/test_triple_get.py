@@ -5,7 +5,7 @@ from kapps_triplestore_interface.utils.iri import IRI
 from rdflib import Literal, XSD
 import pytest
 
-GLOBAL_NAMED_GRAPH = "https://my_named_test_graph"
+GLOBAL_NAMED_GRAPH = "http://my_named_test_graph"
 LOCAL_NAMED_GRAPH = "http://example.org/local_named_graph"
 
 SUB_1 = "http://example.org#subject1"

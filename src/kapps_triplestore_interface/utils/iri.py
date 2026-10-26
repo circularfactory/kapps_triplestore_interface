@@ -124,8 +124,8 @@ class IRI(URIRef):
         easy visual decoding. Order of replacement matters for reversibility.
 
         Example:
-            https://www.sfb1574.kit.edu/ontologies/TransferUnit#hasConveyorBelt
-            → https_c_www_d_sfb1574_d_kit_d_edu_s_ontologies_s_TransferUnit_h_hasConveyorBelt
+            http://www.sfb1574.kit.edu/ontologies/TransferUnit#hasConveyorBelt
+            → http_c__s__s_www_d_sfb1574_d_kit_d_edu_s_ontologies_s_TransferUnit_h_hasConveyorBelt
         """
         lined = str(self)
         for a, b in self.LINED_PATTERN:
@@ -140,7 +140,7 @@ class IRI(URIRef):
         Reverses the encoding applied by `lined` property.
         Decode order: _c_→:, _s_→/, _d_→., _h_→#, then __→_.
 
-        Example: https_c__s__s_example_d_com_h_Property → https://example.com#Property
+        Example: http_c__s__s_example_d_com_h_Property → http://example.com#Property
         """
         for a, b in cls.LINED_PATTERN_INV:
             lined = lined.replace(a, b)

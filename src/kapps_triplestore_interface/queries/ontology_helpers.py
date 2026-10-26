@@ -71,7 +71,7 @@ def iri_exists(
         include_explicit=include_explicit,
         include_implicit=include_implicit,
     )
-    result = self.query(query=query, update=False)
+    result = self.query(query=query.to_string(validate=False), update=False)
     if result["boolean"]:
         self.logger.debug(f"Found IRI {iri}")
         return True
@@ -254,7 +254,9 @@ def owl_get_classes_of_individual(
         include_explicit=include_explicit,
         include_implicit=include_implicit,
     )
-    results = self.query(query=query, convert_bindings=True)
+    results = self.query(
+        query=query.to_string(validate=False), convert_bindings=True
+    )
 
     if local_name:
         classes = [

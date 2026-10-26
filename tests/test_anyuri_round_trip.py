@@ -21,7 +21,7 @@ from kapps_triplestore_interface.utils import utils
 from kapps_triplestore_interface.utils.iri import IRI
 
 GRAPH = URIRef("http://example.org/services")
-SERVICE = URIRef("http://example.org/services#detector")
+SERVICE = URIRef("http://example.org/services#endpoint")
 ADDRESS = URIRef("http://example.org/ontology#address")
 
 WITH_SLASH = "http://h:1/"

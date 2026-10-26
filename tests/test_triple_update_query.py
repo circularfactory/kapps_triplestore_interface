@@ -14,9 +14,9 @@ from rdflib import BNode, Literal
 from kapps_triplestore_interface import GraphDB, IRI
 
 
-SUB = IRI("https://example.org/Belt1")
-PRED = IRI("https://example.org/hasSpeed")
-VALUE = IRI("https://example.org/hasValue")
+SUB = IRI("http://example.org/Belt1")
+PRED = IRI("http://example.org/hasSpeed")
+VALUE = IRI("http://example.org/hasValue")
 
 
 @pytest.fixture

@@ -100,7 +100,9 @@ def triples_get(
         include_explicit=include_explicit,
         include_implicit=include_implicit,
     )
-    results = self.query(query=query, convert_bindings=True)
+    results = self.query(
+        query=query.to_string(validate=False), convert_bindings=True
+    )
 
     converted_results = [
         (result["s"], result["p"], result["o"])
@@ -154,7 +156,7 @@ def any_triple_exists(
         where_clauses=[where_clause],
         named_graph=named_graph,
     )
-    ask_result = self.query(query=query, update=False)
+    ask_result = self.query(query=query.to_string(validate=False), update=False)
 
     if ask_result["boolean"] is True:
         self.logger.debug(
@@ -203,7 +205,7 @@ def all_triple_exists(
         where_clauses=triple_strings,
         named_graph=named_graph,
     )
-    ask_result = self.query(query=query, update=False)
+    ask_result = self.query(query=query.to_string(validate=False), update=False)
 
     if ask_result["boolean"] is False:
         self.logger.debug(
@@ -305,7 +307,7 @@ def triples_add(
         triples=validated_triples_to_add,
         named_graph=named_graph,
     )
-    self.query(query=query, update=True)
+    self.query(query=query.to_string(validate=False), update=True)
 
     self.logger.debug(
         f"Successfully added triples: ({triple_strings}), named_graph: {named_graph or "default"}, repository: {self._repository}"
@@ -379,7 +381,7 @@ def triples_delete(
         triples=validated_triples_to_delete,
         named_graph=named_graph,
     )
-    self.query(query=query, update=True)
+    self.query(query=query.to_string(validate=False), update=True)
 
     self.logger.debug(
         f"Successfully deleted triples: ({triple_strings}), named_graph: {named_graph or "default"}, repository: {self._repository}"

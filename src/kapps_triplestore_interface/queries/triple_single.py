@@ -49,7 +49,7 @@ def triple_exists(
         ],
         named_graph=named_graph,
     )
-    result = self.query(query=query)
+    result = self.query(query=query.to_string(validate=False))
     if result["boolean"] is False:
         self.logger.debug(
             f"Unable to find triple ({utils.triple_to_string(triple)}), named_graph: {named_graph or "default"}, repository: {self._repository}"
@@ -85,7 +85,7 @@ def triple_add(
         triples=[triple],
         named_graph=named_graph,
     )
-    self.query(query=query, update=True)
+    self.query(query=query.to_string(validate=False), update=True)
 
     self.logger.debug(
         f"Successfully inserted triple: ({utils.triple_to_string(triple)}) named_graph: {named_graph or "default"}, repository: {self._repository}"
@@ -149,7 +149,7 @@ def triple_delete(
         triples=[triple],
         named_graph=named_graph,
     )
-    self.query(query=query, update=True)
+    self.query(query=query.to_string(validate=False), update=True)
 
     self.logger.debug(
         f"Successfully deleted triple: ({utils.triple_to_string(triple)}), named_graph: {named_graph or "default"}, repository: {self._repository}"
@@ -240,7 +240,7 @@ def triple_update(
         where_clauses=[utils.triple_to_string(old_triple, ".")],
         named_graph=named_graph,
     )
-    self.query(query=query, update=True)
+    self.query(query=query.to_string(validate=False), update=True)
 
     self.logger.debug(
         f"Successfully updated triple to: ({utils.triple_to_string(update_triple)}), named_graph: {named_graph or "default"}, repository: {self._repository}"
