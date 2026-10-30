@@ -134,8 +134,8 @@ def test_the_type_map_types_an_any_uri_value_and_the_mapper_keeps_a_literal_a_st
     # XSDToPythonTypes gives the Python type of a value of the datatype: an xsd:anyURI value
     # is an IRI.
     assert XSDToPythonTypes[any_uri] is IRI
-    # So a `uri` binding equal to xsd:anyURI converts to that type, which callers such as the
-    # OGM use to type a property's range.
+    # So a `uri` binding equal to xsd:anyURI converts to that type, which a caller can use to
+    # type a property's range.
     assert (
         utils.convert_binding_to_python_type({"type": "uri", "value": str(XSD.anyURI)})
         is IRI

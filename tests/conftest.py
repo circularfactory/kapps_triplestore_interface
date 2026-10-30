@@ -52,9 +52,6 @@ REQUIRED_ENV = (
 #   not written here: `tests/` ships, and check 4 in `scripts/release_checks.py` rejects a
 #   private host anywhere in the public tree. The tests use `example.org` for the same reason.
 # - **`TRIPLESTORE_ALLOW_DESTRUCTIVE=1` is set**, which is a person saying so in as many words.
-#
-# `kapps_ogm/tests/conftest.py` carries the same guard, deliberately duplicated: there is no
-# shared test package between these repositories, and a pointer cannot be imported.
 ALLOW_DESTRUCTIVE_ENV = "TRIPLESTORE_ALLOW_DESTRUCTIVE"
 
 LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
@@ -79,9 +76,7 @@ def pytest_collection_modifyitems(items):
     Derived from the fixture graph rather than written on each test, so the marker cannot drift
     out of step with what a test actually needs. ``item.fixturenames`` is the resolved closure,
     so a test that requests ``db`` through another fixture is marked as surely as one that
-    names it. That transitive case is the one that gets missed by hand: it is what let the
-    sibling `kapps_ogm` describe a whole directory as mock-only while 28 of its tests reached a
-    live store through an intermediate fixture.
+    names it. That transitive case is the one that gets missed by hand.
 
     ``-m "not live"`` then selects the tier that runs anywhere. CI does not pass that
     flag: it has a triple store and runs the whole suite.

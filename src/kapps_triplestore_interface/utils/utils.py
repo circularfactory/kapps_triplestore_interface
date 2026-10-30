@@ -223,7 +223,7 @@ def to_literal(
     Returns:
         Union[Literal, str]: The `rdflib.Literal` or its N3 string form when `as_string=True`.
     """
-    # A Literal is also a str. Without this, its own datatype was replaced with XSD.string.
+    # A Literal is also a str: keep its own datatype instead of defaulting to XSD.string.
     if isinstance(value, Literal) and datatype is None:
         datatype = value.datatype
     if isinstance(value, str) and datatype is None:

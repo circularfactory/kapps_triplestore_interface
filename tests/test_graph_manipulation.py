@@ -313,10 +313,9 @@ ASYM_PRED = "http://example.org#asymmetric_predicate"
 def test_update_adds_more_triples_than_it_removes(db: GraphDB, named_graph: str):
     """An update is not restricted to 1:1 replacement.
 
-    `kapps_ogm.OGM.commit` feeds the output of a diff straight to `triples_update`, and a
-    diff is a set difference — the removed and added lists are almost never the same
-    length. An equal-length constraint here therefore breaks every such commit, so this
-    pins the widened contract rather than leaving it to a downstream consumer to discover.
+    A diff is a set difference — the removed and added lists are almost never the same
+    length. An equal-length constraint on `triples_update` therefore breaks every update
+    built from a diff, so this pins the widened contract.
     """
     old = [(ASYM_SUB, ASYM_PRED, 1)]
     new = [(ASYM_SUB, ASYM_PRED, 2), (ASYM_SUB, ASYM_PRED, 3), (ASYM_SUB, ASYM_PRED, 4)]

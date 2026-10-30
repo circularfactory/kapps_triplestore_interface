@@ -4,8 +4,8 @@
 ![Python](https://img.shields.io/badge/python-%3E=3.12-blue)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-This library turns SPARQL queries and updates against a running GraphDB triplestore into
-callable Python methods. Three research projects run it in production.
+This library turns SPARQL queries and updates against a triple store into callable Python
+methods. The adapter it ships talks to GraphDB.
 
 ## Installation
 
@@ -48,8 +48,7 @@ providers and the variables.
 ## The store contract
 
 Code above this interface types its store as `TripleStore`, which `connect()` returns. It
-declares the operations that the object-graph mapper and the middleware call on
-a store, measured in their code, and no other; its docstring lists them. The GraphDB adapter,
+declares the operations that the layers above call on a store, and no other; its docstring lists them. The GraphDB adapter,
 `GraphDB`, implements each one. A test double satisfies the contract without inheriting from
 it.
 

@@ -131,8 +131,8 @@ def test_a_refusal_logs_the_report_at_debug_and_nothing_louder(answering, caplog
     ]
 
 
-# GraphDB 10.8.5's answer (KIT, 2026-10-04) to a clear of the default graph under the shape of
-# kapps_semantic_middleware's issue 379: `sh:minCount` on a sequence path with an inverse step.
+# GraphDB 10.8.5's answer (KIT, 2026-10-04) to a clear of the default graph under a shape
+# with `sh:minCount` on a sequence path with an inverse step.
 # The store fails while it validates. Its answer is not a validation report.
 INTERNAL_ERROR = """\
 Internal error while trying to validate SHACL Shape http://example.org/clear-refusal#S

@@ -85,6 +85,7 @@ uv.lock
 .release-state.json
 
 # Local agent output: the orchestrator's run logs per task, and scratch notes. A build's
-# handoff and briefs under .claude/log/<ticket>/ stay trackable; only runs/ is machine output.
+# handoff and briefs under .claude/log/ stay trackable; only the runs/ directories are machine
+# output.
 .claude/log/*/runs/
 .scratch/

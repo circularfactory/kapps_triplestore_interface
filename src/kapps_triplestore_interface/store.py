@@ -33,10 +33,9 @@ from kapps_triplestore_interface.utils.types import (
 class TripleStore(Protocol):
     """A store, as the layers above the interface use it.
 
-    It declares each operation that the object-graph mapper and the middleware
-    call on a store, measured in their code, and no other. The GraphDB adapter, `GraphDB`,
-    implements it; each operation is documented there. A test double implements it without
-    inheriting from it.
+    It declares each operation that the layers above call on a store, and no other. The GraphDB
+    adapter, `GraphDB`, implements it; each operation is documented there. A test double
+    implements it without inheriting from it.
 
     - Reads: `query`, `triple_exists`, `triples_get`, `iri_exists`, `is_subclass`,
       `owl_get_classes_of_individual`, `graph_get`.

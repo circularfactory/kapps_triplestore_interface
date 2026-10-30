@@ -2,15 +2,12 @@
 
 These tests run without a triple store.
 
-The operations were measured in the code of the object-graph mapper and the middleware on
-2026-10-10: every call that their sources, tests, examples and demo scripts make on a
-store. An operation that none of them calls is not in the contract, even when the GraphDB
+An operation that no layer above calls is not in the contract, even when the GraphDB
 adapter has it. The contract declares each operation under its new name: `graph_get`,
-`graph_add`, `graph_clear` and `dataset` replace the names that were measured.
+`graph_add`, `graph_clear` and `dataset`.
 
-The store registries are the exception that the border names: callers reached past the
-interface for a dataset's prefixes and its SHACL shapes, so the contract declares the four
-operations that replace those calls.
+The store registries are declared too: four operations give a caller a dataset's prefixes and
+its SHACL shapes without reaching past the interface.
 """
 
 from __future__ import annotations

@@ -43,11 +43,9 @@ PRIVATE_HOSTS: tuple[str, ...] = (
 )
 """The private hosts that must appear nowhere in a public tree.
 
-Index 0 is the private Git host -- where this library is actually developed, and the one the
-sibling repos already ban. Index 1 is the institute's GraphDB, and it is here because it had
-already leaked: the connection-reuse entry in `CHANGELOG.md` quoted the endpoint it measured
-against. That is not a credential, and it is behind KIT authentication, but an internal
-service address in a public changelog is a thing somebody notices later rather than never.
+Index 0 is the private Git host, where this library is developed. Index 1 is the institute's
+GraphDB. An internal service address is not a credential, and it is behind KIT authentication,
+but it has no place in a public changelog.
 
 `@kit.edu` in an author's e-mail address is deliberately *not* banned. The bare domain is
 public and the addresses are the credit this release is required to carry; only these two
@@ -61,10 +59,8 @@ DEAD_REFERENCE_DIRS: tuple[str, ...] = (
 """Record directories that never ship, so a pointer at one is dead on arrival.
 
 Index 0 is the decision records, index 1 the requirements documents. This repository has
-neither directory -- the check is kept because the text it guards arrives from outside it. An
-earlier changelog entry cited a decision record of the sibling repository by its full path,
-which no reader of the public tree can open, and that citation was written by hand into a file
-that ships.
+neither directory; the check stays because a shipped file can still point at one by its full
+path.
 """
 
 CITATION: re.Pattern[str] = re.compile("ADR" + r"[-:\s]*" + "[0-9]{4}")

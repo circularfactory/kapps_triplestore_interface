@@ -253,11 +253,9 @@ def render_update(
     only in `new_triples` is minted with `BIND(BNODE())`.
     """
     # One map across both sides: a BNode occurring in old_triples and in new_triples is
-    # the *same* node, so it must render as the same SPARQL variable. Two maps gave it
-    # two variables, and the new-side one was then bound by BIND(BNODE()) below — which
-    # minted a replacement node and orphaned every triple the caller had not listed in
-    # old_triples. That made it impossible to update one property of an existing blank
-    # node while keeping the node.
+    # the *same* node, so it must render as the same SPARQL variable. A separate variable
+    # on the new side would be bound by BIND(BNODE()) below, minting a replacement node
+    # and orphaning every triple the caller had not listed in old_triples.
     bn_var_map: Dict[BNode, str] = {}
 
     old_patterns = build_patterns(old_triples, bn_var_map, "bn")

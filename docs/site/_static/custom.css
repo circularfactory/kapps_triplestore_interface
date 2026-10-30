@@ -2,7 +2,7 @@
  *
  * Colours follow the SFB1574 Circular Factory site on KIT's web platform:
  * KIT green as the accent, SFB navy as the secondary, and a short green rule
- * under the headings. The same file as kapps-semantic-middleware's.
+ * under the headings.
  */
 
 /* -- Layout: fill the window ---------------------------------------------
@@ -50,8 +50,7 @@ html[data-theme="dark"] {
 
 /* -- The SFB heading rule -------------------------------------------------
  *
- * The Circular Factory site sets a short green rule under each heading rather
- * than a full-width border. This reproduces it.
+ * A short green rule under each heading rather than a full-width border.
  */
 .bd-article h1,
 .bd-article h2 {

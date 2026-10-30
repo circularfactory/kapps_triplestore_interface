@@ -1,7 +1,6 @@
 """The old names still work for one release, and each use of one warns once and names its successor.
 
-The interface's public names follow one convention and name no vendor, as the triple store
-border decision of the KAPPS family states. Each name that this release replaces stays as a
+The interface's public names follow one convention and name no vendor. Each name that this release replaces stays as a
 deprecated alias:
 
 | Old | New |

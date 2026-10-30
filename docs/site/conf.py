@@ -1,11 +1,7 @@
 """Sphinx configuration for the kapps-triplestore-interface documentation site.
 
-Vendored from ``kapps_semantic_middleware``'s ``docs/site/conf.py``: the same toolchain, theme
-and version switcher, with the ``project`` block and the icon links changed, and the
-scenario-notebook block dropped, since this repository has no notebooks.
-
-Two things differ from that file, and both follow from this repository having no hand-written
-pages:
+The toolchain is Sphinx with a theme and a version switcher. Two things follow from this
+repository having no hand-written pages:
 
 - **The landing page is the README.** ``index.md`` is a stub, and ``setup()`` below hands
   Sphinx ``README.md`` in its place while it reads that page. The page is the artefact: the two
@@ -18,7 +14,7 @@ pages:
   deprecated name is left out: the reference shows the name that replaces it.
 
 The footer's copyright text is read from the ``LICENSE`` two directories above this file, so a
-vendored copy needs a ``Copyright (c) <year> <holder>`` line there, or the build raises.
+copy of this file needs a ``Copyright (c) <year> <holder>`` line there, or the build raises.
 """
 
 import logging
@@ -35,7 +31,7 @@ author = "Jan-Felix Klein, Nico Brandt, Sören Weindel, Etienne Hoffmann"
 def _copyright_from_license(license_path: Path) -> str:
     """The footer's copyright text, read from the copyright lines of the LICENSE.
 
-    ``Copyright (c) 2026 Etienne Hoffmann`` becomes ``2026, Etienne Hoffmann``, the form Sphinx
+    ``Copyright (c) 2026 Jane Doe`` becomes ``2026, Jane Doe``, the form Sphinx
     prints. The LICENSE is the only place the holder and year are written; several lines join
     with ``; ``.
     """
@@ -110,8 +106,8 @@ html_title = project
 
 html_theme_options = {
     "logo": {
-        # The SFB1574 mark, as on the kapps-semantic-middleware site: one asset for both
-        # themes, given a white chip in dark mode by custom.css.
+        # The SFB1574 mark: one asset for both themes, given a white chip in dark mode by
+        # custom.css.
         "image_light": "_static/sfb-logo.png",
         "image_dark": "_static/sfb-logo.png",
         "alt_text": "SFB 1574 Circular Factory",

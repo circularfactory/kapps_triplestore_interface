@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.3.0 — 2026-10-30
+
+### Changed
+
+- **The README's opening says what the library is**: it turns SPARQL queries and updates against a
+  triple store into Python methods, and names GraphDB as the store of the adapter that it ships.
+  The claim about running in production is removed. Comments and docstrings in the package, the
+  tests, the docs configuration and the manifest now describe only the code around them, and a
+  reference to a person outside the credits is removed. Behaviour and the public interface do not
+  change.
+
 ## 2.2.3 — 2026-10-26
 
 ### Changed
@@ -226,9 +237,8 @@
   deprecated name `GraphDBCredentials` warns, as the next entry says.
 
 - **The public names follow one convention and name no vendor, and the old names are
-  deprecated aliases.** The names are those of the KAPPS family's decision record *The triple
-  store border*: the noun first and the verb second, the Graph Store verbs of the SPARQL 1.1
-  Graph Store HTTP Protocol, and *dataset* for the unit of a store, which GraphDB calls a
+  deprecated aliases.** The names put the noun first and the verb second, use the Graph Store verbs of the SPARQL 1.1
+  Graph Store HTTP Protocol, and call the unit of a store a *dataset*, which GraphDB calls a
   repository. Each old name still works. Each use of it emits one `DeprecationWarning` that
   names its successor, at the line that uses it. A later major release removes them.
 
@@ -549,7 +559,7 @@
   again. A plain `str` would lose the datatype, and `triples_add` would read it as an IRI.
   Datatypes in the map convert as before.
 
-  Reported, with a first fix, by Jingcheng Wu in a pull request on the public repository.
+  Reported, with a first fix, in a pull request on the public repository.
 
 ## 2.1.1 — 2026-09-17
 
