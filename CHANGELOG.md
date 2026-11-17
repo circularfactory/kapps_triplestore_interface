@@ -1,5 +1,165 @@
 # Changelog
 
+## 2.4.0 — 2026-11-17
+
+### Added
+
+- **A checked write also removes the write receipts older than 10 minutes, in the same
+  request** (`queries/checked_write.py`). A receipt whose process stopped before its removal (a
+  crash, a kill, a stop without `close()`) used to stay in `urn:x-kapps:write-receipts` for
+  ever. Now every checked write, through GraphDB and through the Kadi adapter, ends its update
+  request with one more operation that removes every receipt of the graph whose time is older
+  than 10 minutes before the client's clock, whoever wrote it. It is an operation of its own,
+  so a false precondition still applies it, and a checked write still sends two requests. The
+  bound is a module constant, not a parameter. A client whose clock runs more than 10 minutes
+  behind could remove a young receipt. No sweep by an operator is needed.
+
+- **`present_triples` on `triples_update`** (interim name). Triples that must exist explicitly
+  in the target graph when the update applies. They join the precondition inside the update's
+  `WHERE`, beside the old triples and `absent_subjects`; they are neither removed nor added.
+  A writer that read a value it does not change can now require it. With `present_triples`, the
+  write is checked also when `check_exist=False`. A false precondition raises
+  `PreconditionFailedError`, whose `.triples` list the old triples, then the present triples,
+  then `(subject, None, None)` per absent subject. A triple that is only inferred fails, as an
+  old triple does. The update text without it is unchanged. The `TripleStore` contract, `GraphDB`
+  and the Kadi adapter take it.
+
+- **A CONSTRUCT or DESCRIBE through `query()` returns its triples as an rdflib `Graph`**
+  (`TripleStore.query`, `GraphDB.query`). A read now offers the store the JSON result format
+  and N-Triples, and the client reads the answer by its media type, so a text query is still
+  sent as it is, without a parse. SELECT and ASK answer the same dicts as before;
+  `convert_bindings` is ignored for a CONSTRUCT or DESCRIBE. The return type of `query()`
+  widens from `Dict | bool` to `Dict | bool | Graph`. `SPARQLQuery` gets the builders
+  `construct` / `add_construct_block` and `describe` / `add_describe_block`, with the named
+  graph and the explicit/implicit choice of the SELECT builder. A read through Kadi still
+  offers the JSON result format alone.
+
+- **Runnable examples, and a command that copies them out** (`kapps_triplestore_interface/examples/`,
+  `kapps_triplestore_interface/examples_cli.py`). The package now ships three examples:
+  connect and run one SELECT, replace a property with `triples_update` and see why that is not
+  a delete followed by an add, and keep the identity of a blank node across an update. The
+  console command `kapps-triplestore-examples [DIR]` copies them, with the compose files that
+  start a local GraphDB, into a directory that you own. A second run into the same directory
+  keeps your edits; `--force` overwrites them. The examples need no account at any institute:
+  they run against the GraphDB that the compose file starts. The repository there runs the
+  `rdfsplus-optimized` ruleset.
+
+- **The datatypes of the Uncertainty Quantification ontology have Python classes**
+  (`utils.UncertaintyQuantification`): `GaussianMixtureLiteral` for `uq:gmmLiteral`,
+  `HistogramLiteral` for `uq:histogramLiteral`, `DirichletLiteral` for `uq:dirichletLiteral` and
+  `NonNegativeDouble` for `uq:nonNegativeDouble`. A query result converts such a literal to its
+  class, and `rdflib.Literal(value)` writes the class with its datatype. A value read from a
+  lexical form writes that same form back, so a write names the stored literal again. A
+  lexical form that breaks a rule of its datatype raises `ValueError` on conversion, as a
+  malformed `xsd:integer` does.
+
+- **`shapes_get()` joins the store contract and the GraphDB adapter** (`TripleStore` and
+  `GraphDB`, with the store registries). It gives the SHACL shapes that the store validates the
+  dataset's writes against as an rdflib `Graph`, the type that `graph_get` gives: the read of
+  what `shapes_set` writes, so a document set and then read gives the same triples. A dataset
+  without shapes gives an empty graph. Code above the interface no longer names the store's
+  shapes graph. Like `shapes_set`, the adapter first reads the repository configuration and
+  raises `TripleStoreNotSupportedError` when it does not say that SHACL validation is on; the
+  shapes graph is then not read. A 401 raises `AuthenticationError`, a 403
+  `TripleStoreAccessError`, any other error status `TripleStoreResponseError`, and no answer
+  `TripleStoreUnavailableError`; the read is retried once after the store closed an idle
+  connection. It reads the one graph that `shapes_set` writes, RDF4J's
+  `rdf4j:SHACLShapeGraph`; further shapes graphs of a repository are not read. A store
+  without a shapes registry raises `TripleStoreNotSupportedError`, as the other registry
+  operations do.
+
+- **A store says which reasoning ruleset its dataset runs: `ruleset_get()`** (`TripleStore`,
+  `GraphDB`). It returns the ruleset's name as the store names it, for example
+  `"rdfsplus-optimized"` or `"owl2-rl"`, or `None` when the store does not say. On GraphDB it
+  reads the `ruleset` parameter of the repository's configuration, the request that
+  `shapes_set` already sends, and an error answer raises what that read raises: for a missing
+  dataset, `InvalidDatasetError` when the store answers `Unknown repository: <dataset>`, and
+  `TripleStoreResponseError` with status 404 for any other 404. The method reports and does not
+  judge; which rulesets a consumer supports is the consumer's rule. A store other than GraphDB returns
+  `None`.
+
+- **Access to the triple store of a Kadi instance** (`kapps_triplestore_interface/kadi.py`,
+  also exported from the package).
+
+  - **`connect_kadi(instance=None, host=None, pat=None)`** connects to the triple store of a Kadi
+    instance. The host and personal access token are passed directly or read from the config
+    file `~/.kadiconfig`, using the given or the default instance. Kadi
+    checks the token and the user's groups and grants access to the graphs of its ACL graph;
+    no credential of the store is needed. A token with only the scope `triple_store.write`
+    can connect and write.
+  - **`KadiTripleStore`** is the returned store. It provides the data operations of
+    `TripleStore` and `graphs_get`. The prefix and shapes registries and the validation of the
+    whole dataset are not provided by Kadi and raise `TripleStoreNotSupportedError`;
+    `ruleset_get()` returns `None`. A checked write needs a named graph, a token with both
+    scopes, and Read and Write on the receipt graph `urn:x-kapps:write-receipts` in Kadi's
+    ACL graph.
+  - **`KadiPATAuth(pat)`** sends the personal access token as bearer token. Its `repr` never
+    shows the token.
+
+  Data that the SHACL shapes of the store refuse raises `ShaclValidationError` with
+  `409 Conflict: The data does not conform to the SHACL shapes of the triple store.` Any
+  other error answer of Kadi is shown as its status line and description:
+  `403 Forbidden: You do not have permission to read the graph <...>.`
+
+### Changed
+
+- **The README says what the receipts graph is** (documentation only). The graph
+  `urn:x-kapps:write-receipts` is the interface's bookkeeping, outside the dataset's
+  information and vocabulary. The README names its triple (receipt IRI, predicate
+  `urn:x-kapps:appliedAt`, time as `xsd:dateTime`), says why no ontology defines the predicate,
+  and says that shapes and vocabulary checks of a dataset leave the graph out and that
+  left-over receipts keep their time (a later checked write removes them by their age).
+
+- **The return type of `query()` widens to `Dict | bool | Graph`** (`TripleStore.query`,
+  `GraphDB.query`, `KadiTripleStore.query`), and a read through GraphDB sends
+  `Accept: application/sparql-results+json, application/n-triples;q=0.9` instead of the JSON
+  result format alone. A SELECT or ASK answers as before; a typed caller that indexes the
+  result of a SELECT narrows it as it narrowed `Dict | bool`.
+
+- **`GraphDB` builds on `RDF4JClient`, the client that the adapters share**
+  (`kapps_triplestore_interface/rdf4j_client.py`). The client holds the transport, `query` and
+  the data operations of the RDF4J protocol; `GraphDB` adds GraphDB's administration and its
+  deprecated names. Its public API, its construction and its errors are unchanged, and the
+  helpers that other modules import from `graph_db` are still importable from there.
+
+### Deprecated
+
+- **`check_exist=False` on `triples_update` and `triple_update` warns** (`GraphDB`,
+  `KadiTripleStore`). An unchecked update returns `True` whether or not it applied. A call
+  with `check_exist=False` now emits one `DeprecationWarning` at the caller's line, also with
+  `absent_subjects`; what it sends does not change. Interface 3.0.0 always checks the update
+  and removes the parameter from the two update operations: leave out `check_exist`, or pass
+  `True`. `triples_add`, `triple_add`, `triples_delete` and `triple_delete` keep
+  `check_exist=False` without a warning.
+
+### Fixed
+
+- **`owl_get_classes_of_individual` takes namespaces in `ignored_prefixes`, as its signature
+  says.** A `Namespace` made the store refuse the query as malformed, because it was written
+  into the query as a prefix name. A `Namespace` now leaves out every class whose IRI starts
+  with it; it goes into the query as an escaped string literal. A prefix name as a plain string
+  (`"owl"`, `"rdfs"`, the default) works as before, and a list may mix both. Both adapters,
+  `GraphDB` and `KadiTripleStore`, share the fix.
+
+- **The login is sent once more after the store closed the idle connection.** When the token
+  fell due for renewal on a connection that the store had closed while it sat idle, the login
+  failed and the read with it. The login is now sent again once, on a fresh connection, as a
+  read is; a second failure raises `TripleStoreUnavailableError`. It is `GraphDB`'s alone:
+  `KadiTripleStore` sends a token that is not renewed, and never logs in.
+
+- **`close()` releases the sessions of a client used again after `close()`.** The calling
+  thread, and every other thread, kept its closed session and used it again, and a later
+  `close()` missed it. A request after `close()` now opens a new session in its thread, and the
+  next `close()` releases it. The fix is in `RDF4JClient`, so `KadiTripleStore` shares it.
+
+- **A dataset deleted after `connect()` raises `InvalidDatasetError`, as `connect()` does.** A
+  request that the store answers with 404 and `Unknown repository: <dataset>` raised the general
+  `TripleStoreResponseError`. It now raises `InvalidDatasetError`, whose message names the
+  dataset and the store's answer. A 404 with another meaning, such as a named graph that the
+  graph store does not have, keeps its type. The check is in `RDF4JClient`, so `KadiTripleStore`
+  shares it; Kadi states its own errors in JSON, and such a 404 keeps its type and its status
+  line.
+
 ## 2.3.0 — 2026-10-30
 
 ### Changed

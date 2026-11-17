@@ -2,6 +2,7 @@
 
 from typing import List, Union, Any, Optional, Tuple, TYPE_CHECKING
 from rdflib import BNode, Literal
+from kapps_triplestore_interface import _deprecation
 from kapps_triplestore_interface.queries import checked_write
 from kapps_triplestore_interface.utils import utils
 from kapps_triplestore_interface.utils.iri import IRI
@@ -396,6 +397,7 @@ def triples_update(
     check_exist: Optional[bool] = True,
     named_graph: Optional[GraphNameLike] = None,
     absent_subjects: Optional[List[SubjectLike]] = None,
+    present_triples: Optional[TriplesLike] = None,
 ) -> bool:
     """
     Update multiple RDF triples in the triplestore.
@@ -408,7 +410,7 @@ def triples_update(
     "possessed by exactly one resource" shape) must never expose the intermediate state
     in which the property is momentarily absent.
 
-    With `check_exist=True` or `absent_subjects`, the write is checked: a receipt written by
+    With `check_exist=True`, `absent_subjects` or `present_triples`, the write is checked: a receipt written by
     the same update proves that its `WHERE` matched. A normal return means that the store
     evaluated the precondition as true and committed the change. The store isolates commits
     only (read committed): another writer can commit between the evaluation of the
@@ -424,26 +426,37 @@ def triples_update(
         old_triples (TriplesLike): Triples to remove.
         new_triples (TriplesLike): Triples to insert. Need not match the length of `old_triples`.
         check_exist (Optional[bool]): If True, the precondition is that all old triples exist.
-            Defaults to True. If False and `absent_subjects` is not given, no receipt is
-            written: the update still applies only when the old triples match its `WHERE`,
-            and returns True either way.
+            Defaults to True. If False and neither `absent_subjects` nor `present_triples` is
+            given, no receipt is written: the update still applies only when the old triples
+            match its `WHERE`, and returns True either way. Deprecated: `check_exist=False`
+            emits a `DeprecationWarning`, also with `absent_subjects` or `present_triples`, and
+            interface 3.0.0 removes the unchecked update, so that the update is always checked.
         named_graph (Optional[GraphNameLike]): Override the client's default named graph.
         absent_subjects (Optional[List[SubjectLike]]): IRIs that must not yet be the subject of
             any explicit triple in the target graph. A subject that occurs only as an object
             (a forward reference) passes. Adds to the precondition. With it, the write is
             checked also when `check_exist=False`, and the old triples are part of the
             precondition, because they are always part of the `WHERE`.
+        present_triples (Optional[TriplesLike]): (Interim name.) Triples that must exist
+            explicitly in the target graph when the update applies. They join the precondition
+            beside the old triples and `absent_subjects`; they are neither removed nor added.
+            A caller that read a value it does not change can require it so. A triple that is
+            only inferred fails. With it, the write is checked also when `check_exist=False`.
 
     Returns:
         bool: True. A false precondition raises instead of returning False. Two empty lists
-        send no request and return True.
+        send no request and return True, also with `absent_subjects` or `present_triples`:
+        there is nothing to write, so nothing to check.
 
     Raises:
         PreconditionFailedError: The precondition was false, and nothing was written. Its
-            `.triples` are `old_triples`, followed by `(subject, None, None)` for each of
-            `absent_subjects`.
+            `.triples` are `old_triples`, then `present_triples`, then
+            `(subject, None, None)` for each of `absent_subjects`.
         InvalidInputError: A triple or an absent subject is invalid.
     """
+    if not check_exist:
+        _deprecation.unchecked_update("triples_update")
+
     named_graph = IRI(named_graph) if named_graph is not None else self.named_graph
 
     if not old_triples and not new_triples:
@@ -452,11 +465,14 @@ def triples_update(
     validated_old_triples = [utils.sanitize_triple(triple) for triple in old_triples]
     validated_new_triples = [utils.sanitize_triple(triple) for triple in new_triples]
     subjects = checked_write.sanitize_absent_subjects(absent_subjects)
+    validated_present = [utils.sanitize_triple(triple) for triple in present_triples or []]
 
-    if check_exist or subjects:
+    if check_exist or subjects or validated_present:
         conditions = []
         if validated_old_triples:
             conditions.append("all old triples exist")
+        if validated_present:
+            conditions.append("all present triples exist")
         if subjects:
             conditions.append("no absent subject has a triple")
         return checked_write.checked_write(
@@ -467,7 +483,9 @@ def triples_update(
             named_graph=named_graph,
             precondition=" and ".join(conditions) or "none",
             named_triples=validated_old_triples
+            + validated_present
             + [(subject, None, None) for subject in subjects],
+            present_triples=validated_present,
             filters=[
                 checked_write.absent_subject_filter(subject, index)
                 for index, subject in enumerate(subjects, start=1)

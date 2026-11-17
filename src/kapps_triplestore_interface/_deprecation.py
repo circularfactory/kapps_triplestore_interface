@@ -7,8 +7,11 @@ names removes this module.
 from __future__ import annotations
 
 import functools
+import os
 import warnings
 from typing import Any, Callable, TypeVar, cast
+
+_PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__)) + os.sep
 
 _Function = TypeVar("_Function", bound=Callable[..., Any])
 
@@ -35,3 +38,19 @@ def renamed(successor: str) -> Callable[[_Function], _Function]:
         return cast(_Function, alias)
 
     return mark
+
+
+def unchecked_update(operation: str) -> None:
+    """Warn that `operation` was called with `check_exist=False`, which 3.0.0 removes.
+
+    The warning is attributed to the first frame outside this package, so the caller's line is
+    reported whichever adapter forwarded the call. It changes nothing that is sent.
+    """
+    warnings.warn(
+        f"{operation}(check_exist=False) sends an unchecked update: it returns True whether or "
+        "not the update applied. Interface 3.0.0 always checks the update and removes the "
+        "check_exist parameter of the update operations. Leave out check_exist (or pass "
+        "check_exist=True) to have a write that reports its outcome.",
+        DeprecationWarning,
+        skip_file_prefixes=(_PACKAGE_DIR,),
+    )

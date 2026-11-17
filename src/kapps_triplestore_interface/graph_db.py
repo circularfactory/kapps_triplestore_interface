@@ -1,99 +1,43 @@
 from __future__ import annotations
 
-from typing import List, NoReturn, Union, Optional, Dict
+from typing import List, Union, Optional, Dict
 from urllib.parse import quote
-import requests
 import logging
-import threading
 import warnings
-from requests import Response
-from urllib3.exceptions import ProtocolError
+from rdflib import Graph
 from kapps_triplestore_interface import _deprecation
-from kapps_triplestore_interface.auth import BasicAuth, GDBTokenAuth, _TripleStoreAuth
+from kapps_triplestore_interface.auth import BasicAuth, GDBTokenAuth
 from kapps_triplestore_interface.store import TripleStoreEndpoint
 from kapps_triplestore_interface.utils.graph_db_credentials import _GraphDBCredentials
-from kapps_triplestore_interface.utils.iri import IRI
-from kapps_triplestore_interface.utils.types import GraphNameLike, GraphName
-from kapps_triplestore_interface.sparql_query import SPARQLQuery
-from kapps_triplestore_interface.queries import checked_write as _checked_write
+from kapps_triplestore_interface.utils.types import GraphNameLike
 from kapps_triplestore_interface.exceptions import (
     InvalidDatasetError,
-    AuthenticationError,
-    TripleStoreAccessError,
-    TripleStoreResponseError,
-    TripleStoreUnavailableError,
     TripleStoreNotSupportedError,
-    ShaclValidationError,
-)
-from kapps_triplestore_interface.utils.utils import convert_multi_bindings_to_python_type
-
-# The store states in the media type that its answer is a SHACL validation report. The RDF
-# format follows after a `+`: GraphDB 10.8.1 answers a refused update with HTTP 500 and
-# `application/shacl-validation-report+n-quads`. The body is not inspected: the error text
-# of a malformed update quotes values from the update, and an update can name `sh:` terms.
-SHACL_VALIDATION_REPORT_MEDIA_TYPE = "application/shacl-validation-report"
-
-
-def _carries_validation_report(response: Response) -> bool:
-    media_type = response.headers.get("Content-Type", "").split(";", 1)[0]
-    return media_type.strip().lower().startswith(SHACL_VALIDATION_REPORT_MEDIA_TYPE)
-
-
-# The error statuses that name an action of their own. Any other error status is the general
-# `TripleStoreResponseError`.
-_ERROR_FOR_STATUS: Dict[int, type[TripleStoreResponseError]] = {
-    401: AuthenticationError,
-    403: TripleStoreAccessError,
-}
-
-
-def _raise_error_answer(
-    logger: logging.Logger, response: Response, failure: str
-) -> NoReturn:
-    """Log the store's error answer and raise it, typed by its action, with its status.
-
-    The message is `failure`, then the status and the store's answer unchanged:
-    `<failure> (<status>) - <answer>`.
-
-    A validation report is a refusal, whatever the status. A refusal is an outcome the caller
-    expects and catches, so the caller decides how loud it is: it is logged only at DEBUG, and
-    the report travels in the error. Every other error answer is logged at ERROR, and its
-    status selects its type.
-    """
-    status = response.status_code
-    message = f"{failure} ({status}) - {response.text}"
-    if _carries_validation_report(response):
-        logger.debug(message)
-        raise ShaclValidationError(message, report=response.text, status=status)
-    logger.error(message)
-    raise _ERROR_FOR_STATUS.get(status, TripleStoreResponseError)(message, status=status)
-
-
-# The failures of a request that got no answer: the store cannot be reached, it did not answer
-# in time, or the connection dropped, also while the answer arrived. `requests.ConnectTimeout`
-# is both a `ConnectionError` and a `Timeout`, and an SSL failure is a `ConnectionError`. Each
-# raises `TripleStoreUnavailableError`, chained to it. Any other error of the HTTP client is a
-# request that it could not build, such as a URL without a scheme, and is raised unchanged.
-_NO_ANSWER = (
-    requests.ConnectionError,
-    requests.Timeout,
-    requests.exceptions.ChunkedEncodingError,
 )
 
-
-def _connection_aborted(error: requests.ConnectionError) -> bool:
-    """Whether the store closed the connection after the request went out on it.
-
-    requests wraps urllib3's `ProtocolError('Connection aborted.', ...)`, for example with
-    `RemoteDisconnected` or `ConnectionResetError`. A store that cannot be reached at all
-    gives a different cause, which is not retried.
-    """
-    return bool(error.args) and isinstance(error.args[0], ProtocolError)
+# The media type stays importable from here, as before the client was shared.
+from kapps_triplestore_interface.rdf4j_client import (  # pylint: disable=unused-import
+    SHACL_VALIDATION_REPORT_MEDIA_TYPE,
+    RDF4JClient,
+    _raise_error_answer,
+    _raise_missing_dataset,
+)
 
 
 # The graph that a GraphDB repository with SHACL validation reads its shapes from: RDF4J's
 # reserved shapes graph. A SPARQL query does not see the shapes in it.
 _SHAPES_GRAPH = "http://rdf4j.org/schema/rdf4j#SHACLShapeGraph"
+# The query parameters that name the shapes graph on the graph store.
+_SHAPES_GRAPH_PARAMS = {"graph": _SHAPES_GRAPH}
+
+
+def _params_of(configuration: object) -> Optional[Dict]:
+    """The `params` of a repository configuration, or `None` when it has none that is an
+    object. `configuration` is GraphDB's answer to `GET /rest/repositories/<id>`."""
+    if not isinstance(configuration, dict):
+        return None
+    params = configuration.get("params")
+    return params if isinstance(params, dict) else None
 
 
 def _true_or_false(params: Dict, name: str) -> Optional[bool]:
@@ -122,15 +66,33 @@ def _shacl_validation_on(configuration: object) -> Optional[bool]:
     the file wraps the store in an `rdf4j:ShaclSail`, and false for a plain `graphdb:Sail`.
     GraphDB 10.8.1 answers true for the first as well.
     """
-    if not isinstance(configuration, dict):
-        return None
-    params = configuration.get("params")
-    if not isinstance(params, dict):
+    params = _params_of(configuration)
+    if params is None:
         return None
     shacl = _true_or_false(params, "isShacl")
     if shacl is None:
         return None
     return shacl and _true_or_false(params, "validationEnabled") is not False
+
+
+def _ruleset_of(configuration: object) -> Optional[str]:
+    """The reasoning ruleset that a repository runs, as its configuration names it, or `None`.
+
+    `configuration` is GraphDB's answer to `GET /rest/repositories/<id>`. Its `params` hold
+    `ruleset`, whose `value` is the ruleset's name, for example `rdfsplus-optimized`. The name
+    is returned without surrounding white space. `None` means the configuration has no ruleset
+    value: no `params`, no `ruleset` in them, or a value that is not a non-empty string.
+    """
+    params = _params_of(configuration)
+    if params is None:
+        return None
+    param = params.get("ruleset")
+    if not isinstance(param, dict):
+        return None
+    value = param.get("value")
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value.strip()
 
 
 def _probe(store: GraphDB) -> None:
@@ -154,12 +116,7 @@ def _probe(store: GraphDB) -> None:
         retry_after_idle_close=True,
     )
     if response.status_code == 404:
-        message = (
-            f"The store at {store._endpoint.url} has no repository '{store._repository}'"
-            f" ({response.status_code}) - {response.text}"
-        )
-        store.logger.error(message)
-        raise InvalidDatasetError(message)
+        _raise_missing_dataset(store, response)
     if not response.ok:
         _raise_error_answer(
             store.logger,
@@ -168,7 +125,7 @@ def _probe(store: GraphDB) -> None:
         )
 
 
-class GraphDB:
+class GraphDB(RDF4JClient):
     """
     The GraphDB adapter: a store of the contract `TripleStore`, on a GraphDB repository.
 
@@ -213,10 +170,6 @@ class GraphDB:
             TypeError: If neither `credentials` nor both `endpoint` and `auth` are given, or
                 if both are.
         """
-        if logger is None:
-            self.logger = logging.getLogger(self.__class__.__name__)
-        else:
-            self.logger = logger
         if use_gdb_token is not None:
             warnings.warn(
                 "use_gdb_token is deprecated; pass an auth provider, which replaces it:"
@@ -241,46 +194,24 @@ class GraphDB:
             raise TypeError(
                 "GraphDB needs either credentials, or an endpoint and an auth provider."
             )
+        # No request: the provider logs in at the first one. Built from credentials, the
+        # client checks the dataset and the named graph below, so it keeps neither yet.
+        super().__init__(
+            endpoint,
+            auth,
+            timeout=timeout,
+            named_graph=named_graph if credentials is None else None,
+            logger=logger,
+            store_name="GraphDB",
+        )
         self._credentials = credentials
-        self._endpoint = endpoint
-        self._auth_provider: _TripleStoreAuth = auth
-        self._timeout = timeout
-        # The `Authorization` header of the last request, `None` before the first one.
-        self._auth: Optional[str] = None
         self._repositories: Optional[List[str]] = None
-        self._blank_ids = set()
 
-        # A persistent session per thread, so the connection pool survives across calls.
-        # The module-level `requests.get`/`requests.post` helpers build a throwaway session
-        # per call, which means a new TCP connect and a full TLS handshake for every SPARQL
-        # query — against a remote HTTPS endpoint that dominates the cost of a query, and a
-        # client typically issues many.
-        #
-        # Per thread rather than one shared session, because a `requests.Session` is not
-        # thread-safe: its cookie jar is mutated by every response. One client is commonly
-        # driven from several threads at once — a web framework serving requests while the
-        # embedding code queries — and urllib3's pools are thread-safe but the session
-        # around them is not. Each thread pays one handshake and then reuses its own pool.
-        self._thread_local = threading.local()
-        self._sessions: list[requests.Session] = []
-        self._sessions_lock = threading.Lock()
-
-        # The receipts of this client's checked writes whose `ASK` has found them, still to
-        # remove. The next checked write of any thread carries their removal, and `close()`
-        # removes the rest (`queries/checked_write.py`).
-        self._receipts_to_remove = _checked_write.ReceiptsToRemove()
-
-        if credentials is None:
-            # No request: the provider logs in at the first one.
-            self._repository = endpoint.dataset
-            self._named_graph = IRI(named_graph) if named_graph is not None else None
-        else:
+        if credentials is not None:
             self._auth = auth._authorization(self)
             self._repositories = self.datasets_get(only_ids=True)
             self.dataset = credentials.repository
             self.named_graph = named_graph
-
-        if credentials is not None:
             self.logger.info(
                 f"Using GraphDB repository '{self._repository}' as user '{credentials.username}'."
             )
@@ -304,40 +235,12 @@ class GraphDB:
         """
         return cls(credentials=_GraphDBCredentials.from_env(), logger=logger)
 
-    from kapps_triplestore_interface.queries.named_graph import (
-        graphs_get,
-        get_list_of_named_graphs,
-    )
+    # The deprecated names of data operations, which only this adapter keeps.
+    from kapps_triplestore_interface.queries.named_graph import get_list_of_named_graphs
     from kapps_triplestore_interface.queries.rdf4j.graph_store import (
-        graph_get,
-        graph_add,
-        graph_clear,
         fetch_statements,
         import_statements,
         clear_graph,
-    )
-
-    from kapps_triplestore_interface.queries.triple_single import (
-        triple_exists,
-        triple_add,
-        triple_delete,
-        triple_update,
-    )
-    from kapps_triplestore_interface.queries.triple_multi import (
-        triples_get,
-        any_triple_exists,
-        all_triple_exists,
-        triples_add,
-        triples_delete,
-        triples_update,
-    )
-    from kapps_triplestore_interface.queries.ontology_helpers import (
-        iri_exists,
-        new_iri,
-        new_blank_id,
-        is_subclass,
-        owl_is_named_individual,
-        owl_get_classes_of_individual,
     )
 
     @property
@@ -375,45 +278,6 @@ class GraphDB:
         value: str,
     ):
         self.dataset = value
-
-    @property
-    def named_graph(self) -> Optional[GraphName]:
-        """
-        The currently selected default named graph.
-
-        Returns:
-            Optional[IRI]: The default named graph as an `IRI`, or `None` if unset.
-        """
-        return self._named_graph
-
-    @named_graph.setter
-    def named_graph(
-        self,
-        value: Optional[GraphNameLike],
-    ):
-        if value is None:
-            self._named_graph = None
-            return
-
-        value = IRI(value)
-
-        if value not in self.graphs_get():
-            self.logger.warning(
-                f"Passed named graph {value} does not exist in the repository."
-            )
-        self._named_graph = value
-
-    @property
-    def named_graph_str(self) -> Optional[str]:
-        """
-        The selected default named graph as a string.
-
-        Returns:
-            Optional[str]: The IRI string of the default named graph, or `None`.
-        """
-        if self._named_graph is None:
-            return None
-        return str(self._named_graph)
 
     def datasets_get(
         self,
@@ -487,134 +351,6 @@ class GraphDB:
             )
         return repository
 
-    def _make_request(
-        self,
-        method: str,
-        endpoint: str,
-        timeout: Optional[int] = None,
-        retry_after_idle_close: bool = False,
-        authenticate: bool = True,
-        **kwargs,
-    ) -> Response:
-        """
-        Perform an authenticated HTTP request to the GraphDB REST API.
-
-        The auth provider gives the request its `Authorization` header, and logs in first when
-        it must. When the store answers 401, the provider renews once, and the request is sent
-        once more with the new header; its answer is returned, also a second 401. This is safe
-        for a write too: a store that answers 401 has not applied the write. A provider that has
-        nothing to renew, such as Basic authentication, returns the first 401.
-
-        Args:
-            method (str): The HTTP method (e.g., "get", "post").
-            endpoint (str): The REST endpoint path relative to `base_url`.
-            timeout (Optional[int]): Request timeout in seconds; defaults to the client setting.
-            retry_after_idle_close (bool): Marks the request as safe to send again. When the
-                store closed the pooled connection while it sat idle, so that the request got
-                no answer, the request is sent once more on a fresh connection. Only a read
-                sets it. Any other failure is raised, and a second failure is raised as well.
-                Defaults to False: a write is never sent again, because the store may have
-                applied it, and a second send could apply it twice.
-            authenticate (bool): Whether the request carries the provider's header. Only the
-                login itself sets it to False.
-            **kwargs: Additional arguments forwarded to `requests`.
-
-        Returns:
-            Response: The `requests.Response` object, also for an error status: the caller
-            reads the status.
-
-        Raises:
-            TripleStoreUnavailableError: If the request got no answer: the store cannot be
-                reached, it did not answer in time, or the connection dropped. It is chained to
-                the error of the HTTP client.
-        """
-        timeout = timeout if timeout is not None else self._timeout
-
-        headers = kwargs.pop("headers", {})
-
-        url = f"{self._endpoint.url}/{endpoint}"
-
-        def send(authorization: Optional[str]) -> Response:
-            sent_headers = dict(headers)
-            if authorization is not None:
-                sent_headers["Authorization"] = authorization
-            return self._session.request(
-                method,
-                url,
-                headers=sent_headers,
-                timeout=timeout,
-                **kwargs,
-            )
-
-        def send_once_more_after_idle_close(authorization: Optional[str]) -> Response:
-            try:
-                return send(authorization)
-            except requests.ConnectionError as error:
-                # The store closes a keep-alive connection that has been idle for a while (a
-                # remote GraphDB measured: after 5 s). A request that leaves on it at that moment
-                # gets no answer. A read is sent again once, on a fresh connection. A write is
-                # never sent again, because the store may have applied it, and a second one could
-                # apply it twice.
-                if not retry_after_idle_close or not _connection_aborted(error):
-                    raise
-                self.logger.info(
-                    f"The store closed the connection without an answer ({error}). Sending the read again on a fresh connection."
-                )
-                self._session.close()
-                return send(authorization)
-
-        try:
-            if not authenticate:
-                return send_once_more_after_idle_close(None)
-            authorization = self._auth_provider._authorization(self)
-            self._auth = authorization
-            response = send_once_more_after_idle_close(authorization)
-            if response.status_code != 401:
-                return response
-            renewed = self._auth_provider._renew(self, authorization)
-            if renewed is None:
-                return response
-            self.logger.info(
-                f"The store answered 401 to {method.upper()} {url}. Logged in again; sending the request once more."
-            )
-            self._auth = renewed
-            return send_once_more_after_idle_close(renewed)
-        except _NO_ANSWER as error:
-            raise TripleStoreUnavailableError(
-                f"No answer from the store to {method.upper()} {url}: {error}"
-            ) from error
-
-    @property
-    def _session(self) -> requests.Session:
-        """This thread's persistent session, created on first use."""
-        session = getattr(self._thread_local, "session", None)
-        if session is None:
-            session = requests.Session()
-            self._thread_local.session = session
-            with self._sessions_lock:
-                self._sessions.append(session)
-        return session
-
-    def close(self) -> None:
-        """Remove the receipts still to remove, then release the HTTP connection pools.
-
-        The receipts of the client's checked writes go in one update request, before the
-        sessions close; no request goes when there is none. A failure of that request is
-        logged as a warning and not raised: each receipt carries its time for a later sweep,
-        and the sessions close all the same.
-        """
-        try:
-            _checked_write.remove_receipts(self)
-        finally:
-            self._close_sessions()
-
-    def _close_sessions(self) -> None:
-        """Release the HTTP connection pools held for every thread that used this client."""
-        with self._sessions_lock:
-            sessions, self._sessions = self._sessions, []
-        for session in sessions:
-            session.close()
-
     def _get_authentication_token(
         self,
         username: str,
@@ -634,109 +370,26 @@ class GraphDB:
             AuthenticationError: If the store does not accept the credentials (401).
             TripleStoreAccessError: If the store answers 403.
             TripleStoreResponseError: If the store answers with any other error status.
-            TripleStoreUnavailableError: If the store gives no answer.
+            TripleStoreUnavailableError: If the store gives no answer. When the store closed the
+                connection without an answer, the login is sent once more, on a fresh
+                connection, and raises only if that fails as well.
         """
         payload = {
             "username": username,
             "password": password,
         }
+        # The login changes nothing in the store, so it is safe to send again, as a read is.
         response = self._make_request(
-            "post", "rest/login", authenticate=False, json=payload
+            "post",
+            "rest/login",
+            authenticate=False,
+            retry_after_idle_close=True,
+            json=payload,
         )
         if response.status_code == 200:
             return response.headers.get("Authorization")
 
         _raise_error_answer(self.logger, response, "Failed to obtain a GDB token")
-
-    def query(
-        self,
-        query: Union[SPARQLQuery, str],
-        update: Optional[bool] = False,
-        convert_bindings: Optional[bool] = False,
-    ) -> Union[Dict, bool]:
-        """
-        Execute a SPARQL query or update against the repository.
-
-        What parses on the client depends on who built the query:
-
-        - The interface, for its own operations (`triples_get`, `triples_add`,
-          `iri_exists` and the like): sent as text, not parsed. It renders every term
-          itself, so a parse could find only a defect in its fixed template text.
-        - A caller, as a `SPARQLQuery`: parsed first, as before. A malformed query raises
-          `InvalidQueryError`.
-        - A caller, as a `str`: sent as it is, without a parse, as before.
-
-        Args:
-            query (Union[SPARQLQuery, str]): The SPARQL query/update string to execute.
-            update (Optional[bool]): If True, perform an update; otherwise perform a read query.
-                Defaults to False.
-            convert_bindings (Optional[bool]): Whether to convert query result bindings to Python types.
-                Defaults to False.
-
-        Returns:
-            Union[Dict, bool]: If `update` is False, the parsed JSON result dict.
-            If `update` is True, `True`. A failure raises instead.
-
-        Raises:
-            TypeError: If the `query` parameter is neither a `SPARQLQuery` nor a string.
-            InvalidQueryError: If the SPARQL query is malformed.
-            ShaclValidationError: If the store refused the update because the data would
-                violate a SHACL shape. Its `report` is the store's validation report. The
-                refusal is logged only at DEBUG; the caller decides how loud it is.
-            AuthenticationError: If the store answers 401.
-            TripleStoreAccessError: If the store answers 403.
-            TripleStoreResponseError: If the store answers with any other error status. Its
-                `status` is that status. It is logged at ERROR, as are the two above.
-            TripleStoreUnavailableError: If the request gets no answer. When the store closed
-                the connection without an answer, a read (`update=False`) is sent once more, on
-                a fresh connection, and raises only if that fails as well. An update is never
-                sent again.
-        """
-        if isinstance(query, SPARQLQuery):
-            query = query.to_string()
-        elif not isinstance(query, str):
-            raise TypeError("Query must be a SPARQLQuery or a string.")
-
-        endpoint = f"repositories/{self._repository}"
-        headers = {
-            "Content-Type": "application/sparql-query",
-            "Accept": "application/sparql-results+json",
-        }
-
-        if update:
-            endpoint += "/statements"
-            headers["Content-Type"] = "application/sparql-update"
-        response = self._make_request(
-            "post",
-            endpoint,
-            headers=headers,
-            data=query,
-            retry_after_idle_close=not update,
-        )
-
-        if not response.ok:
-            _raise_error_answer(self.logger, response, "Error while querying GraphDB")
-
-        if update:
-            self.logger.debug(
-                'Query\n"""\n%s\n"""\nReturned\nUpdate successful (200)', query
-            )
-            return True
-
-        response = response.json()
-        # The answer can be large; format it only when the line is written.
-        self.logger.debug('Query\n"""\n%s\n"""\nReturned\n%s', query, response)
-
-        if (
-            convert_bindings
-            and "results" in response
-            and "bindings" in response["results"]
-        ):
-            bindings = response["results"]["bindings"]
-            converted_bindings = convert_multi_bindings_to_python_type(bindings)
-            response["results"]["bindings"] = converted_bindings
-
-        return response
 
     # -- the store registries: the dataset's prefixes and its SHACL shapes -------------------
 
@@ -855,6 +508,99 @@ class GraphDB:
             )
         return response.json()
 
+    def _graph_store_address(self) -> str:
+        """The address of the dataset's graph store, where the shapes graph is read and set."""
+        return f"repositories/{self._repository}/rdf-graphs/service"
+
+    def _require_shacl_validation(self, verb: str) -> None:
+        """Raise `TripleStoreNotSupportedError` unless the repository's configuration says that
+        SHACL validation is on. `verb` is what the caller cannot do with the shapes: "set" or
+        "read".
+
+        Raises:
+            TripleStoreNotSupportedError: If the configuration says that SHACL validation is
+                off, or does not say. The message names the repository.
+            The error of `_repository_configuration` if the configuration cannot be read.
+        """
+        validation = _shacl_validation_on(self._repository_configuration())
+        if validation is True:
+            return
+        reason = (
+            "does not say whether SHACL validation is on"
+            if validation is None
+            else "says that SHACL validation is off"
+        )
+        raise TripleStoreNotSupportedError(
+            f"Cannot {verb} the SHACL shapes of repository '{self._repository}': its"
+            f" configuration {reason}. A repository gets SHACL validation only when it is"
+            " created."
+        )
+
+    def shapes_get(self) -> Graph:
+        """The SHACL shapes that the store validates the dataset's writes against, as a graph.
+
+        It is the read of what `shapes_set` writes: a document set and then read gives the same
+        triples. A dataset without shapes gives an empty graph.
+
+        The adapter first reads the repository's configuration, as `shapes_set` does, and raises
+        `TripleStoreNotSupportedError` when it does not say that SHACL validation is on: such a
+        dataset holds no shapes that validate anything, and the shapes graph is then plain data.
+        Then it reads RDF4J's shapes graph, `rdf4j:SHACLShapeGraph`, in one GET on the graph
+        store, as Turtle.
+
+        Limit: only that one graph is read, the one that `shapes_set` writes. A repository
+        configured with further shapes graphs validates against those as well, and their shapes
+        are not in the answer.
+
+        Returns:
+            Graph: The shapes, of the type that `graph_get` gives.
+
+        Raises:
+            TripleStoreNotSupportedError: If the configuration does not say that the dataset has
+                SHACL validation. The shapes graph is not read.
+            AuthenticationError: If the store answers 401.
+            TripleStoreAccessError: If the store answers 403.
+            TripleStoreResponseError: If the store answers with any other error status. The
+                message names the repository.
+            TripleStoreUnavailableError: If a request gets no answer. When the store closed the
+                connection without an answer, the read is sent once more, on a fresh
+                connection, and raises only if that fails as well.
+        """
+        self._require_shacl_validation("read")
+        response = self._make_request(
+            "get",
+            self._graph_store_address(),
+            params=_SHAPES_GRAPH_PARAMS,
+            headers={"Accept": "text/turtle"},
+            retry_after_idle_close=True,
+        )
+        if not response.ok:
+            _raise_error_answer(
+                self.logger,
+                response,
+                f"Failed to read the SHACL shapes of repository '{self._repository}'",
+            )
+        shapes = Graph()
+        if response.text.strip():
+            shapes.parse(data=response.text, format="turtle")
+        return shapes
+
+    def ruleset_get(self) -> Optional[str]:
+        """The reasoning ruleset of the dataset, as GraphDB names it, or `None`.
+
+        For example `"rdfsplus-optimized"`, `"owl2-rl"` or `"owl-max"`. The adapter reads the
+        `ruleset` parameter of the repository's configuration, the request that `shapes_set`
+        sends first. `None` means the configuration has no ruleset value. The method reports;
+        which rulesets a caller supports is the caller's rule.
+
+        Raises:
+            InvalidDatasetError: If the store answers 404 with `Unknown repository: <dataset>`.
+            TripleStoreResponseError: For any other error answer, typed by its status as every
+                configuration read is, also a 404 with another answer.
+            TripleStoreUnavailableError: If the store gives no answer.
+        """
+        return _ruleset_of(self._repository_configuration())
+
     def shapes_set(self, data: str, content_type: str) -> None:
         """Replace the SHACL shapes that the store validates the dataset against with `data`.
 
@@ -885,20 +631,9 @@ class GraphDB:
                 example to a document that it cannot parse. The message names the repository.
             TripleStoreUnavailableError: If a request gets no answer. A write is not sent again.
         """
-        validation = _shacl_validation_on(self._repository_configuration())
-        if validation is not True:
-            reason = (
-                "does not say whether SHACL validation is on"
-                if validation is None
-                else "says that SHACL validation is off"
-            )
-            raise TripleStoreNotSupportedError(
-                f"Cannot set the SHACL shapes of repository '{self._repository}': its"
-                f" configuration {reason}. A repository gets SHACL validation only when it is"
-                " created."
-            )
-        graph = {"graph": _SHAPES_GRAPH}
-        address = f"repositories/{self._repository}/rdf-graphs/service"
+        self._require_shacl_validation("set")
+        graph = _SHAPES_GRAPH_PARAMS
+        address = self._graph_store_address()
         if data.strip():
             response = self._make_request(
                 "put",
@@ -950,12 +685,7 @@ class GraphDB:
             retry_after_idle_close=True,
         )
         if response.status_code == 404:
-            message = (
-                f"The store at {self._endpoint.url} has no repository '{self._repository}'"
-                f" ({response.status_code}) - {response.text}"
-            )
-            self.logger.error(message)
-            raise InvalidDatasetError(message)
+            _raise_missing_dataset(self, response)
         if not response.ok:
             _raise_error_answer(
                 self.logger,

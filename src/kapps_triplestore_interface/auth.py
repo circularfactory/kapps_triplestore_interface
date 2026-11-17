@@ -15,6 +15,7 @@ from kapps_triplestore_interface import _environment
 
 if TYPE_CHECKING:
     from kapps_triplestore_interface.graph_db import GraphDB
+    from kapps_triplestore_interface.rdf4j_client import RDF4JClient
 
 # A GDB token is renewed when it is this old. GraphDB's default validity of a token is 30 days,
 # and the validity of a server's tokens is not part of the token. A server with a shorter
@@ -39,10 +40,10 @@ class _TripleStoreAuth(Protocol):  # pylint: disable=too-few-public-methods
     sends the request once more with it.
     """
 
-    def _authorization(self, store: "GraphDB") -> Optional[str]:
+    def _authorization(self, store: "RDF4JClient") -> Optional[str]:
         """The `Authorization` header of the next request. Logs in when it must."""
 
-    def _renew(self, store: "GraphDB", refused: Optional[str]) -> Optional[str]:
+    def _renew(self, store: "RDF4JClient", refused: Optional[str]) -> Optional[str]:
         """A new header after a 401, or `None` if the provider has nothing to renew.
 
         `refused` is the header that the store answered with 401.
@@ -86,10 +87,10 @@ class BasicAuth:
     # the store nor the refused header.
     # pylint: disable=unused-argument
 
-    def _authorization(self, store: "GraphDB") -> Optional[str]:
+    def _authorization(self, store: "RDF4JClient") -> Optional[str]:
         return self._header
 
-    def _renew(self, store: "GraphDB", refused: Optional[str]) -> Optional[str]:
+    def _renew(self, store: "RDF4JClient", refused: Optional[str]) -> Optional[str]:
         return None
 
     # pylint: enable=unused-argument

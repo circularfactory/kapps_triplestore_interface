@@ -10,6 +10,8 @@ suite's store is configured, as in CI, and skips elsewhere.
   disposable dataset with SHACL validation, as every live test does. Each leaves the dataset
   with no shapes and without the data that it wrote. The documents name every IRI in full and
   declare no prefix, so that loading them adds no prefix to the dataset.
+  `shapes_get` reads back what `shapes_set` wrote, and an empty graph after every shape is
+  removed.
 - **A dataset without SHACL validation.** One more dataset on the same store, created without
   SHACL validation, named by `TRIPLESTORE_TEST_DATASET_WITHOUT_SHACL`. Without it, that test
   skips. The test writes nothing to it, unless the adapter fails to refuse.
@@ -25,6 +27,8 @@ import re
 import uuid
 
 import pytest
+from rdflib import Graph
+from rdflib.compare import isomorphic
 
 from kapps_triplestore_interface import (
     GDBTokenAuth,
@@ -173,6 +177,19 @@ def test_shapes_set_with_an_empty_document_removes_every_shape(
 
     assert _insert(db, f"<{ITEM}> <{PART}> <{EX}two> .")
     assert _insert(db, f"<{ITEM}> <{COLOUR}> <{EX}red> .")
+
+
+def test_shapes_get_reads_back_what_shapes_set_wrote(db: GraphDB, no_shapes_afterwards):
+    db.shapes_set(AT_MOST_ONE_PART, "text/turtle")
+
+    shapes = db.shapes_get()
+
+    # The shape has a blank node, so the graphs are compared up to its name.
+    assert isomorphic(shapes, Graph().parse(data=AT_MOST_ONE_PART, format="turtle"))
+
+    db.shapes_set("", "text/turtle")
+
+    assert len(db.shapes_get()) == 0
 
 
 # -- a dataset without SHACL validation --------------------------------------------------------

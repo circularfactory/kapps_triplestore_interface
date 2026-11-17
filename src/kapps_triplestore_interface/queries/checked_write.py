@@ -17,9 +17,18 @@ transaction, so a commit costs the store one write transaction, not two. If that
 (a refusal, an error status, no answer), the receipts it carried stay to remove: the store
 rolled the whole request back or applied it, and a second removal of a receipt that is gone
 changes nothing. If its precondition is false, the removals that it carried were applied.
-`GraphDB.close()` removes the receipts still to remove, in one request, before it closes the
+`RDF4JClient.close()` removes the receipts still to remove, in one request, before it closes the
 sessions. A receipt that outlives its process (the process stopped before a later write or
-`close()`) keeps its time, so that a later sweep can find it.
+`close()`) keeps its time, and is removed by the first checked write of any client after it is
+10 minutes old: every checked write ends its update request with one more operation, after the
+removals above, that removes every receipt of the receipt graph older than `RECEIPT_MAX_AGE`
+by the client's clock. It is an operation of its own, not a part of the write's `WHERE`, so a
+false precondition still applies it, and it costs no extra request. The bound is far above the
+time from a write to its `ASK`, so it never removes a receipt that its writer can still ask for.
+No sweep by an operator or a watchdog is needed.
+
+The receipt graph is the interface's bookkeeping, outside the dataset's information and
+vocabulary: no ontology defines its predicate.
 
 Scope: the precondition reads the **explicit** triples of the target graph only. With a named
 graph, `WITH <g>` does that, because inferred triples are always in the default graph. Without
@@ -27,6 +36,10 @@ one, `USING <DEFAULT_GRAPH>` restricts the `WHERE` to the explicit triples of th
 and the removals are written in `GRAPH <DEFAULT_GRAPH> { … }`, so that the delete acts on the
 same graph that the check read. A bare removal template would also remove copies of the triple
 in every named graph.
+
+A write can also require triples that it does not change (`present_triples` of
+`triples_update`, interim name): they join the `WHERE` as patterns and are neither removed nor
+inserted.
 
 The contract: a normal return means that the store evaluated the precondition as true and
 committed the change. The store isolates commits only ("read committed"): another writer can
@@ -36,7 +49,7 @@ commits.
 """
 
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List, Optional, Sequence, TYPE_CHECKING
 from uuid import uuid4
 
@@ -57,13 +70,17 @@ from kapps_triplestore_interface.utils.types import (
 )
 
 if TYPE_CHECKING:
-    from kapps_triplestore_interface import GraphDB
+    from kapps_triplestore_interface.rdf4j_client import RDF4JClient
 
 # The graph that holds receipts, and the predicate that carries a receipt's time. A receipt
 # that outlives its process (the process stopped before its removal) keeps its time, so that a
-# later sweep can find it.
+# later checked write can find it by its age.
 RECEIPT_GRAPH = URIRef("urn:x-kapps:write-receipts")
 RECEIPT_PREDICATE = URIRef("urn:x-kapps:appliedAt")
+
+# A checked write removes every receipt older than this, whoever wrote it. Far above the time
+# from any write to its `ASK`.
+RECEIPT_MAX_AGE = timedelta(minutes=10)
 
 # The default graph alone, without the named graphs and without inferred triples, as a dataset
 # for `USING` and as a graph for `GRAPH`. The store's own IRI for the graph without a name.
@@ -106,11 +123,11 @@ class ReceiptsToRemove:
 
 
 # Guards the creation of the list on a client that `__init__` did not build (a test double
-# made with `GraphDB.__new__`). `GraphDB.__init__` creates the list itself.
+# made with `__new__`). `RDF4JClient.__init__` creates the list itself.
 _RECEIPTS_LOCK = threading.Lock()
 
 
-def receipts_to_remove(db: "GraphDB") -> ReceiptsToRemove:
+def receipts_to_remove(db: "RDF4JClient") -> ReceiptsToRemove:
     """The client's receipts to remove, created on first use if the client has none."""
     receipts = getattr(db, "_receipts_to_remove", None)
     if receipts is None:
@@ -138,11 +155,25 @@ def render_removals(receipts: Sequence[URIRef]) -> str:
     )
 
 
-def remove_receipts(db: "GraphDB") -> None:
+def render_age_removal(now: datetime) -> str:
+    """One operation that removes every receipt older than `RECEIPT_MAX_AGE` before `now`."""
+    cutoff = Literal(now - RECEIPT_MAX_AGE, datatype=XSD.dateTime).n3()
+    graph = RECEIPT_GRAPH.n3()
+    return (
+        f"DELETE {{ GRAPH {graph} {{ ?old ?oldp ?oldo }} }}\n"
+        f"WHERE {{ GRAPH {graph} {{\n"
+        f"  ?old {RECEIPT_PREDICATE.n3()} ?oldt .\n"
+        f"  FILTER(?oldt < {cutoff})\n"
+        f"  ?old ?oldp ?oldo .\n"
+        f"}} }}"
+    )
+
+
+def remove_receipts(db: "RDF4JClient") -> None:
     """Remove every receipt still to remove, in one update request; send none if there is none.
 
     A failure keeps the receipts to remove and is logged as a warning, not raised: each receipt
-    carries its time for a later sweep.
+    carries its time, and a later checked write removes it by its age.
     """
     pending = receipts_to_remove(db)
     receipts = pending.take()
@@ -154,7 +185,8 @@ def remove_receipts(db: "GraphDB") -> None:
         pending.put_back(receipts)
         db.logger.warning(
             f"The receipts {', '.join(r.n3() for r in receipts)} in {RECEIPT_GRAPH.n3()} "
-            f"could not be removed ({error}). Each carries its time for a later sweep."
+            f"could not be removed ({error}). Each carries its time; a later checked write "
+            f"removes it by its age."
         )
 
 
@@ -242,6 +274,7 @@ def render_update(
     filters: Sequence[str] = (),
     receipt: Optional[URIRef] = None,
     applied_at: Optional[str] = None,
+    present_triples: Sequence[Triple] = (),
 ) -> str:
     """Render `DELETE {old} INSERT {new} WHERE {old}`.
 
@@ -251,6 +284,9 @@ def render_update(
 
     A blank node in both lists is the same node and renders as the same variable. A blank node
     only in `new_triples` is minted with `BIND(BNODE())`.
+
+    `present_triples` join the `WHERE` as patterns, like the old triples, but are neither
+    deleted nor inserted. A blank node in them is a variable, shared with the other lists.
     """
     # One map across both sides: a BNode occurring in old_triples and in new_triples is
     # the *same* node, so it must render as the same SPARQL variable. A separate variable
@@ -259,6 +295,7 @@ def render_update(
     bn_var_map: Dict[BNode, str] = {}
 
     old_patterns = build_patterns(old_triples, bn_var_map, "bn")
+    present_patterns = build_patterns(present_triples, bn_var_map, "bn")
     bn_bound_by_where = set(bn_var_map)
     insert_patterns = build_patterns(new_triples, bn_var_map, "bn")
 
@@ -268,7 +305,7 @@ def render_update(
         var for bnode, var in bn_var_map.items() if bnode not in bn_bound_by_where
     ]
 
-    where_patterns = list(dict.fromkeys(old_patterns))
+    where_patterns = list(dict.fromkeys(old_patterns + present_patterns))
     where_parts: List[str] = []
     if where_patterns:
         where_parts.append(_format_block(where_patterns))
@@ -313,7 +350,7 @@ WHERE {{
 
 
 def checked_write(
-    db: "GraphDB",
+    db: "RDF4JClient",
     operation: str,
     old_triples: Sequence[Triple],
     new_triples: Sequence[Triple],
@@ -321,15 +358,17 @@ def checked_write(
     precondition: str,
     named_triples: Sequence[PartialTriple],
     filters: Sequence[str] = (),
+    present_triples: Sequence[Triple] = (),
 ) -> bool:
     """Send one update with its precondition and a receipt, then read the receipt.
 
     The update request also carries the removal of every receipt that the client still has to
-    remove, as further operations after the update (see the module docstring). The receipt of
-    this write joins them once its `ASK` has found it.
+    remove, as further operations after the update, and one last operation that removes the
+    receipts older than `RECEIPT_MAX_AGE` (see the module docstring). The receipt of this write
+    joins the receipts to remove once its `ASK` has found it.
 
     Args:
-        db (GraphDB): The client.
+        db (RDF4JClient): The client.
         operation (str): The public function's name, for messages.
         old_triples (Sequence[Triple]): Triples that must exist, and are removed.
         new_triples (Sequence[Triple]): Triples to insert.
@@ -337,6 +376,8 @@ def checked_write(
         precondition (str): The precondition in words, for the error message.
         named_triples (Sequence[PartialTriple]): What the error names as `.triples`.
         filters (Sequence[str]): Further `FILTER` clauses of the precondition.
+        present_triples (Sequence[Triple]): Triples that must exist, and stay: they join the
+            `WHERE`, and are neither removed nor inserted.
 
     Returns:
         bool: True. A false precondition raises instead of returning False.
@@ -352,19 +393,26 @@ def checked_write(
             is not consulted, and the receipts that the request carried stay to remove.
     """
     receipt = URIRef(f"urn:uuid:{uuid4()}")
-    applied_at = Literal(datetime.now(timezone.utc), datatype=XSD.dateTime).n3()
+    now = datetime.now(timezone.utc)
+    applied_at = Literal(now, datatype=XSD.dateTime).n3()
     update = render_update(
         old_triples,
         new_triples,
         named_graph,
         filters=filters,
+        present_triples=present_triples,
         receipt=receipt,
         applied_at=applied_at,
     )
-    # The write's own update stays the first operation of the request; the removals follow.
+    # The write's own update stays the first operation of the request; the carried removals
+    # follow, and the age removal is last.
     pending = receipts_to_remove(db)
     carried = pending.take()
-    request = f"{update} ;\n{render_removals(carried)}" if carried else update
+    operations = [update]
+    if carried:
+        operations.append(render_removals(carried))
+    operations.append(render_age_removal(now))
+    request = " ;\n".join(operations)
     try:
         db.query(query=request, update=True)
     except BaseException:

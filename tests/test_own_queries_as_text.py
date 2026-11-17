@@ -30,6 +30,12 @@ TRIPLE = (SUB, PRED, OBJ)
 MORE = [TRIPLE, (SUB, PRED, OTHER_OBJ)]
 
 
+def _unchecked_triple_update(db, triple, **kwargs):
+    """`triple_update(check_exist=False)`, asserting the warning that it emits."""
+    with pytest.warns(DeprecationWarning, match="unchecked update"):
+        return db.triple_update(triple, check_exist=False, **kwargs)
+
+
 def _response(media_type: str, body: str) -> requests.Response:
     response = requests.Response()
     response.status_code = 200
@@ -113,8 +119,8 @@ OPERATIONS = {
     "triple_delete": lambda db: db.triple_delete(
         TRIPLE, check_exist=False, named_graph=GRAPH
     ),
-    "triple_update": lambda db: db.triple_update(
-        TRIPLE, new_obj=OTHER_OBJ, check_exist=False, named_graph=GRAPH
+    "triple_update": lambda db: _unchecked_triple_update(
+        db, TRIPLE, new_obj=OTHER_OBJ, named_graph=GRAPH
     ),
 }
 
@@ -240,8 +246,8 @@ def test_a_malformed_iri_fails_before_any_request(
         "triple_delete": lambda db: db.triple_delete(
             ("not an iri", PRED, OBJ), check_exist=False
         ),
-        "triple_update": lambda db: db.triple_update(
-            ("not an iri", PRED, OBJ), new_obj=OTHER_OBJ, check_exist=False
+        "triple_update": lambda db: _unchecked_triple_update(
+            db, ("not an iri", PRED, OBJ), new_obj=OTHER_OBJ
         ),
     }
     before = len(requests_sent)

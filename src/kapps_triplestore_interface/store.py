@@ -43,8 +43,11 @@ class TripleStore(Protocol):
       `triples_update`, `graph_add`, `graph_clear`, and `query` with `update=True`.
     - Names: `new_iri`.
     - The store's registries, which SPARQL does not cover: the dataset's prefixes,
-      `prefixes_get`, `prefix_set` and `prefix_delete`, its SHACL shapes, `shapes_set`, and
-      the validation of the whole dataset against a shapes document, `validate`.
+      `prefixes_get`, `prefix_set` and `prefix_delete`, its SHACL shapes, `shapes_get` and
+      `shapes_set`, and the validation of the whole dataset against a shapes document,
+      `validate`.
+    - A report of the dataset's configuration: its reasoning ruleset, `ruleset_get`, which
+      returns `None` when the store does not say.
     - The store itself: its `dataset`, and `close`.
 
     A store that has no such registry raises `TripleStoreNotSupportedError` for its
@@ -60,7 +63,15 @@ class TripleStore(Protocol):
         query: Union[SPARQLQuery, str],
         update: Optional[bool] = False,
         convert_bindings: Optional[bool] = False,
-    ) -> Union[Dict, bool]: ...
+    ) -> Union[Dict, bool, Graph]:
+        """Run a SPARQL query or update.
+
+        A SELECT returns the JSON result dict, an ASK the JSON result dict with its
+        `boolean`, a CONSTRUCT or DESCRIBE an rdflib `Graph` of the resulting triples, and
+        an update (`update=True`) `True`. `convert_bindings` is ignored for a CONSTRUCT or
+        DESCRIBE. See `GraphDB.query`.
+        """
+        ...
 
     def triple_exists(
         self,
@@ -114,6 +125,7 @@ class TripleStore(Protocol):
         check_exist: Optional[bool] = True,
         named_graph: Optional[GraphNameLike] = None,
         absent_subjects: Optional[List[SubjectLike]] = None,
+        present_triples: Optional[TriplesLike] = None,
     ) -> bool: ...
 
     def iri_exists(
@@ -144,7 +156,7 @@ class TripleStore(Protocol):
     def owl_get_classes_of_individual(
         self,
         instance_iri: IRILike,
-        ignored_prefixes: Optional[List[Namespace]] = None,
+        ignored_prefixes: Optional[List[Union[str, Namespace]]] = None,
         local_name: Optional[bool] = False,
         include_explicit: Optional[bool] = True,
         include_implicit: Optional[bool] = False,
@@ -201,6 +213,27 @@ class TripleStore(Protocol):
         raise TripleStoreNotSupportedError(
             _no_registry(self, "prefix_delete", "prefix")
         )
+
+    def shapes_get(self) -> Graph:
+        """The SHACL shapes that the store validates the dataset's writes against, as a graph.
+
+        The read of what `shapes_set` writes. A dataset without shapes gives an empty graph.
+
+        Raises:
+            TripleStoreNotSupportedError: If the store has no shapes registry, or the dataset
+                has no SHACL validation.
+        """
+        raise TripleStoreNotSupportedError(_no_registry(self, "shapes_get", "shapes"))
+
+    def ruleset_get(self) -> Optional[str]:
+        """The reasoning ruleset of the dataset, as the store names it, or `None`.
+
+        For example `"rdfsplus-optimized"`, `"owl2-rl"` or `"owl-max"` on GraphDB. `None` means
+        the store does not say; a store that has no named rulesets always returns `None`. The
+        method reports and does not judge: which rulesets a caller supports is the caller's
+        rule.
+        """
+        return None
 
     def shapes_set(self, data: str, content_type: str) -> None:
         """Replace the SHACL shapes that the store validates the dataset against with `data`.

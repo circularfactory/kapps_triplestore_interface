@@ -6,7 +6,8 @@ from kapps_triplestore_interface.utils import utils
 from kapps_triplestore_interface.utils.iri import IRI
 from kapps_triplestore_interface.utils.types import IRILike, GraphNameLike
 from kapps_triplestore_interface.exceptions import InvalidInputError
-from rdflib import Namespace
+from rdflib import Namespace, URIRef
+from rdflib.namespace import DefinedNamespace
 
 from kapps_triplestore_interface.sparql_query import SPARQLQuery
 
@@ -196,10 +197,30 @@ def owl_is_named_individual(
     )
 
 
+# The characters that a SPARQL string literal in double quotes cannot hold raw.
+_STRING_ESCAPES = str.maketrans({"\\": "\\\\", '"': '\\"', "\n": "\\n", "\r": "\\r"})
+
+
+def _namespace_start(prefix: Union[str, Namespace, URIRef, type]) -> str:
+    """The SPARQL expression of the namespace IRI that `prefix` stands for.
+
+    A namespace is a full IRI: an rdflib `Namespace` (also a `ClosedNamespace`), a `URIRef`, or
+    one of rdflib's defined namespaces such as `rdflib.OWL`. It goes into the query as an
+    escaped string literal, never as raw text. A `Namespace` and a `URIRef` are a `str` too, so
+    they are told apart first. Any other string is a prefix name that the store has
+    registered, written as `STR(<name>:)`.
+    """
+    if isinstance(prefix, type) and issubclass(prefix, DefinedNamespace):
+        prefix = prefix._NS
+    if isinstance(prefix, (Namespace, URIRef)):
+        return '"' + str(prefix).translate(_STRING_ESCAPES) + '"'
+    return f"STR({prefix}:)"
+
+
 def owl_get_classes_of_individual(
     self: "GraphDB",
     instance_iri: IRILike,
-    ignored_prefixes: Optional[List[Namespace]] = None,
+    ignored_prefixes: Optional[List[Union[str, Namespace]]] = None,
     local_name: Optional[bool] = False,
     include_explicit: Optional[bool] = True,
     include_implicit: Optional[bool] = False,
@@ -213,8 +234,12 @@ def owl_get_classes_of_individual(
 
     Args:
         instance_iri (IRILike): IRI of the individual to inspect.
-        ignored_prefixes (Optional[List[Namespace]]): Prefixes/namespaces to ignore
-            when collecting classes. Defaults to ["owl", "rdfs"].
+        ignored_prefixes (Optional[List[Union[str, Namespace]]]): The classes to leave out,
+            by the start of their IRI. A namespace (an rdflib `Namespace`, a `URIRef`, or a
+            defined namespace such as `rdflib.OWL`) is a full namespace IRI: every class
+            whose IRI starts with it is left out. A plain string is a prefix name that the
+            store has registered, such as `"owl"`. A list may mix both. Defaults to
+            `["owl", "rdfs"]`.
         local_name (Optional[bool]): If True, return only the local names of the classes. Defaults to False.
         include_explicit (Optional[bool]): Include explicit triples. Defaults to True.
         include_implicit (Optional[bool]): Include inferred triples. Defaults to False.
@@ -234,7 +259,7 @@ def owl_get_classes_of_individual(
             "FILTER ("
             + " && ".join(
                 [
-                    f"!STRSTARTS(STR(?class), STR({prefix}:))"
+                    f"!STRSTARTS(STR(?class), {_namespace_start(prefix)})"
                     for prefix in ignored_prefixes
                 ]
             )

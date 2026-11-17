@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import re
 
 import pytest
 import requests
@@ -18,6 +19,31 @@ BASE_URL = "http://store.example.org:7200"
 DATASET = "repo"
 USERNAME = "user"
 PASSWORD = "secret"
+
+# What the stub answers to a CONSTRUCT or DESCRIBE, as N-Triples: a triple of IRIs, one with a
+# language-tagged literal outside ASCII, and one with a typed literal on a blank node.
+GRAPH_ANSWER = (
+    "<http://example.org/s> <http://example.org/p> <http://example.org/o> .\n"
+    '<http://example.org/s> <http://example.org/label> "Grüße"@de .\n'
+    '_:b0 <http://example.org/count> "7"^^<http://www.w3.org/2001/XMLSchema#integer> .\n'
+)
+N_TRIPLES = "application/n-triples"
+
+# The prologue of a query: BASE and PREFIX declarations and comments. The stub reads the query
+# form after it to pick the format of its answer, as the store does; the client reads nothing.
+_PROLOGUE = re.compile(
+    r"\A(?:\s+|#[^\n]*|BASE\s*<[^>]*>|PREFIX\s+[^\s:]*:\s*<[^>]*>)*",
+    re.IGNORECASE,
+)
+
+
+def is_graph_query(query: object) -> bool:
+    """Whether `query` is a CONSTRUCT or a DESCRIBE, after its prologue."""
+    if not isinstance(query, str):
+        return False
+    prologue = _PROLOGUE.match(query)
+    rest = query[prologue.end() :] if prologue else query
+    return re.match(r"(CONSTRUCT|DESCRIBE)\b", rest, re.IGNORECASE) is not None
 
 
 def answer(status: int, body: str = "", media_type: str = "text/plain;charset=UTF-8"):
@@ -36,6 +62,8 @@ class StubStore:
     - Any other request that carries a token which the stub did not issue, or which a test
       expired, gets 401.
     - A query on the dataset answers `true`, and the repository list names the dataset.
+    - A CONSTRUCT or DESCRIBE answers `GRAPH_ANSWER` as N-Triples when its `Accept` offers
+      N-Triples, as the store's content negotiation does, and 406 when it does not.
     """
 
     def __init__(self):
@@ -81,6 +109,13 @@ class StubStore:
                 return answer(401, "Unauthorized")
         if path == "/rest/repositories":
             return answer(200, json.dumps([{"id": DATASET}]), "application/json")
+        if is_graph_query(kwargs.get("data")):
+            if N_TRIPLES not in (headers or {}).get("Accept", ""):
+                return answer(406, "No acceptable file format found.")
+            rdf_answer = answer(200, GRAPH_ANSWER, N_TRIPLES)
+            # A client that decoded the body as text by this guess would garble "Grüße".
+            rdf_answer.encoding = "ISO-8859-1"
+            return rdf_answer
         return answer(
             200,
             json.dumps({"head": {}, "boolean": True}),

@@ -31,10 +31,13 @@ from rdflib import URIRef
 
 from kapps_triplestore_interface import (
     IRI,
+    GDBTokenAuth,
     GraphDB,
     GraphDBCredentials,
+    TripleStoreEndpoint,
     TripleStoreUnavailableError,
 )
+from kapps_triplestore_interface import auth as auth_module
 from kapps_triplestore_interface.queries.checked_write import RECEIPT_GRAPH
 
 REPOSITORY = "repo"
@@ -347,3 +350,51 @@ def test_a_refused_connection_raises_unavailable_with_no_second_send(
 
     assert isinstance(failed.value.__cause__, requests.ConnectionError)
     assert len(sends) == 1
+
+
+# -- the login after an idle close ---------------------------------------------------------------
+
+LOGIN = "/rest/login"
+
+
+@pytest.fixture
+def token_client(store, monkeypatch):
+    """A client with the GDB token, whose clock a test can move past the token's renewal."""
+    now = [0.0]
+    monkeypatch.setattr(auth_module, "_now", lambda: now[0])
+    db = GraphDB(
+        endpoint=TripleStoreEndpoint(url=store.url, dataset=REPOSITORY),
+        auth=GDBTokenAuth("user", "password"),
+    )
+    assert db.query(READ) == ANSWER  # the first login, on first use
+    now[0] += auth_module._RENEW_AFTER
+    yield db
+    db.close()
+
+
+def test_a_login_on_a_connection_the_store_closed_while_idle_is_sent_again_once(
+    store, token_client
+):
+    store.expire_open_connections()
+
+    assert token_client.query(READ) == ANSWER
+
+    logins = store.requests_to(LOGIN)
+    assert [login.answered for login in logins] == [True, False, True]
+    retry_reused_the_closed_connection = logins[2].connection == logins[1].connection
+    assert not retry_reused_the_closed_connection
+    reads = store.requests_to(f"/repositories/{REPOSITORY}")
+    assert [read.answered for read in reads] == [True, True]
+
+
+def test_a_login_whose_retry_fails_as_well_raises_unavailable(store, token_client):
+    store.close_every_connection = True
+
+    with pytest.raises(TripleStoreUnavailableError) as failed:
+        token_client.query(READ)
+
+    assert type(failed.value.__cause__) is requests.ConnectionError
+    logins = store.requests_to(LOGIN)
+    assert [login.answered for login in logins] == [True, False, False]
+    # The first read only.
+    assert len(store.requests_to(f"/repositories/{REPOSITORY}")) == 1

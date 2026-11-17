@@ -1,5 +1,9 @@
 from enum import Enum
-from typing import List, Optional
+from typing import List, Optional, Union
+
+from rdflib import URIRef
+
+from kapps_triplestore_interface.exceptions import InvalidQueryError
 from kapps_triplestore_interface.utils import utils
 from kapps_triplestore_interface.utils.iri import IRI
 from kapps_triplestore_interface.utils.types import TriplesLike, GraphNameLike
@@ -23,7 +27,7 @@ class SPARQLQuery:
     """
     Helper for composing and validating SPARQL queries.
 
-    Builds SELECT/ASK and UPDATE blocks (INSERT/DELETE) with optional default
+    Builds SELECT/ASK/CONSTRUCT/DESCRIBE and UPDATE blocks (INSERT/DELETE) with optional default
     named graph and control over explicit/implicit inference.
     """
 
@@ -72,11 +76,7 @@ class SPARQLQuery:
         block_parts.append(
             f"{select_type.value} {self._create_variable_string(variables)}"
         )
-        part = self._add_explicit_implicit()
-        if self._named_graph:
-            block_parts.append(f"FROM {self._named_graph.n3()}")
-        if part:
-            block_parts.append(part)
+        block_parts.extend(self._from_clauses())
         block_parts.append(f"WHERE {{{self._combine_where_clauses(where_clauses)}}}")
         block = "\n".join(block_parts)
         self._query_blocks.append({"type": select_type, "data": block})
@@ -119,6 +119,105 @@ WHERE {{
         )
         block = "\n".join(block_parts)
         self._query_blocks.append({"type": SPARQLQueryType.ASK, "data": block})
+
+    @classmethod
+    def construct(
+        cls,
+        template: List[str],
+        where_clauses: List[str],
+        **kwargs,
+    ) -> "SPARQLQuery":
+        """
+        Create a new SPARQLQuery instance with a CONSTRUCT block.
+        Refer to `add_construct_block` for details.
+        """
+        query = cls(**kwargs)
+        query.add_construct_block(template, where_clauses)
+        return query
+
+    def add_construct_block(
+        self,
+        template: List[str],
+        where_clauses: List[str],
+    ) -> None:
+        """
+        Add a CONSTRUCT block to the query.
+
+        The named graph and the explicit/implicit choice become `FROM` clauses, as in
+        `add_select_block`. `GraphDB.query` returns the constructed triples as an rdflib
+        `Graph`. Paging is not a builder feature: write LIMIT and OFFSET into a text query.
+
+        Args:
+            template (List[str]): The triple patterns of the template, in SPARQL syntax
+                (e.g., ["?s <http://example.org/p> ?o ."]).
+            where_clauses (List[str]): WHERE patterns/filters to include.
+        """
+        block_parts = [f"CONSTRUCT {{{self._combine_where_clauses(template)}}}"]
+        block_parts.extend(self._from_clauses())
+        block_parts.append(f"WHERE {{{self._combine_where_clauses(where_clauses)}}}")
+        block = "\n".join(block_parts)
+        self._query_blocks.append({"type": SPARQLQueryType.CONSTRUCT, "data": block})
+
+    @classmethod
+    def describe(
+        cls,
+        resources: List[Union[str, URIRef]],
+        where_clauses: Optional[List[str]] = None,
+        **kwargs,
+    ) -> "SPARQLQuery":
+        """
+        Create a new SPARQLQuery instance with a DESCRIBE block.
+        Refer to `add_describe_block` for details.
+        """
+        query = cls(**kwargs)
+        query.add_describe_block(resources, where_clauses)
+        return query
+
+    def add_describe_block(
+        self,
+        resources: List[Union[str, URIRef]],
+        where_clauses: Optional[List[str]] = None,
+    ) -> None:
+        """
+        Add a DESCRIBE block to the query.
+
+        The named graph and the explicit/implicit choice become `FROM` clauses, as in
+        `add_select_block`. `GraphDB.query` returns the description as an rdflib `Graph`.
+
+        Args:
+            resources (List[Union[str, URIRef]]): What to describe, at least one: an
+                `IRI` or `URIRef`, or a SPARQL term as text, such as a variable (`?x`) or a
+                bracketed IRI (`<http://example.org/s>`).
+            where_clauses (Optional[List[str]]): WHERE patterns/filters that bind the
+                variables. Without them, the block has no WHERE clause.
+
+        Raises:
+            InvalidQueryError: If `resources` is empty. (`DESCRIBE *` is not offered: the
+                parser that validates a built query cannot read it.)
+        """
+        if not resources:
+            raise InvalidQueryError(
+                "A DESCRIBE needs at least one resource or variable."
+            )
+        terms = [term.n3() if isinstance(term, URIRef) else term for term in resources]
+        block_parts = [f"DESCRIBE {' '.join(terms)}"]
+        block_parts.extend(self._from_clauses())
+        if where_clauses:
+            block_parts.append(
+                f"WHERE {{{self._combine_where_clauses(where_clauses)}}}"
+            )
+        block = "\n".join(block_parts)
+        self._query_blocks.append({"type": SPARQLQueryType.DESCRIBE, "data": block})
+
+    def _from_clauses(self) -> List[str]:
+        """The `FROM` clauses of the named graph and of the explicit/implicit choice."""
+        clauses = []
+        if self._named_graph:
+            clauses.append(f"FROM {self._named_graph.n3()}")
+        part = self._add_explicit_implicit()
+        if part:
+            clauses.append(part)
+        return clauses
 
     @classmethod
     def insert_data(
@@ -323,9 +422,11 @@ WHERE {{
                 SPARQLQueryType.SELECT,
                 SPARQLQueryType.SELECT_DISTINCT,
                 SPARQLQueryType.SELECT_REDUCED,
+                SPARQLQueryType.CONSTRUCT,
+                SPARQLQueryType.DESCRIBE,
                 SPARQLQueryType.ASK,
             ):
-                # Validate the select or ask query
+                # Validate the read query
                 utils.validate_query(query)
 
             elif self._query_blocks[0]["type"] in (

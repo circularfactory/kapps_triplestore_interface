@@ -11,7 +11,9 @@ Each type tells the caller one action, and its docstring names it:
 - **Fix the call:** the caller used the API incorrectly. Do not send it again.
 
 An error answer of the store raises `TripleStoreResponseError` or one of its subtypes. Its
-`status` is the store's HTTP status, and its message holds the store's answer unchanged.
+`status` is the store's HTTP status, and its message holds the store's answer unchanged. A
+success answer that cannot be read, such as the RDF answer to a CONSTRUCT that does not parse,
+raises `TripleStoreResponseError` too, with that status and the reader's error.
 
 A name that this module deprecates is an alias of the type that replaces it. Each use of the old
 name emits one `DeprecationWarning` that names its successor. The changelog lists them.
@@ -246,7 +248,8 @@ class PreconditionFailedError(TripleStoreInterfaceError):
         message (str): Which write was refused, and why.
         triples (Optional[List[PartialTriple]]): The triples that the precondition named. For a
             delete or an update, the old triples that must exist. For an add, the triples that
-            must not exist yet. A subject from `absent_subjects` appears as `(subject, None, None)`.
+            must not exist yet. For an update, `present_triples` follow the old triples. A subject
+            from `absent_subjects` appears as `(subject, None, None)`.
         named_graph (Optional[GraphName]): The graph the precondition was evaluated in, or `None`
             for the default graph.
     """

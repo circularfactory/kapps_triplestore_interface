@@ -11,7 +11,9 @@ stub records is one of the operation.
 - **Shapes:** the adapter reads the repository configuration first. On a dataset without SHACL
   validation it raises `TripleStoreNotSupportedError` and sends nothing else. Otherwise it
   replaces RDF4J's shapes graph with the new document in one graph-store PUT, which the store
-  applies whole or not at all. An empty document is one DELETE of the shapes graph.
+  applies whole or not at all. An empty document is one DELETE of the shapes graph. The read, `shapes_get`,
+  checks the configuration in the same way, then reads the shapes graph in one graph-store GET
+  that accepts Turtle; an empty answer is an empty graph.
 
 The detection of SHACL validation is one internal function, `_shacl_validation_on`, tested
 here for each answer that the configuration can give. Its input follows GraphDB's documentation
@@ -28,6 +30,7 @@ import json
 from typing import Dict
 
 import pytest
+from rdflib import Graph
 
 from kapps_triplestore_interface import (
     BasicAuth,
@@ -39,6 +42,7 @@ from kapps_triplestore_interface import (
     TripleStoreEndpoint,
     TripleStoreNotSupportedError,
     TripleStoreResponseError,
+    TripleStoreUnavailableError,
 )
 from kapps_triplestore_interface.exceptions import InvalidDatasetError
 from kapps_triplestore_interface.graph_db import _shacl_validation_on
@@ -338,6 +342,95 @@ def test_shapes_set_raises_an_error_answer_of_each_request_with_its_status(
     assert f"'{DATASET}'" in str(failed.value)
 
 
+# -- shapes_get --------------------------------------------------------------------------------
+
+
+def _triples(document: str) -> set:
+    return set(Graph().parse(data=document, format="turtle"))
+
+
+def test_shapes_get_reads_the_shapes_graph_in_one_get(store, adapter):
+    store.answers[CONFIGURATION] = _configuration_answer(**WITH_SHACL)
+    store.answers[GRAPH_STORE] = answer(200, SHAPES, "text/turtle")
+
+    shapes = adapter.shapes_get()
+
+    assert type(shapes) is Graph
+    assert set(shapes) == _triples(SHAPES)
+    assert _requests(store) == [
+        ("GET", CONFIGURATION, None),
+        ("GET", GRAPH_STORE, {"graph": SHAPES_GRAPH}),
+    ]
+    assert store.headers[1]["Accept"] == "text/turtle"
+
+
+@pytest.mark.parametrize("status", [200, 204])
+def test_shapes_get_of_a_dataset_without_shapes_is_an_empty_graph(
+    store, adapter, status
+):
+    store.answers[CONFIGURATION] = _configuration_answer(**WITH_SHACL)
+    store.answers[GRAPH_STORE] = answer(status, "", "text/turtle")
+
+    shapes = adapter.shapes_get()
+
+    assert type(shapes) is Graph
+    assert len(shapes) == 0
+
+
+@pytest.mark.parametrize(
+    "params",
+    [WITHOUT_SHACL, {"ruleset": "rdfsplus-optimized"}],
+    ids=["no-shacl", "no-shacl-flag"],
+)
+def test_shapes_get_on_a_dataset_without_shacl_raises_and_reads_nothing_else(
+    store, adapter, params
+):
+    store.answers[CONFIGURATION] = _configuration_answer(**params)
+
+    with pytest.raises(TripleStoreNotSupportedError) as refused:
+        adapter.shapes_get()
+
+    assert f"'{DATASET}'" in str(refused.value)
+    assert "read" in str(refused.value)
+    assert _requests(store) == [("GET", CONFIGURATION, None)]
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [("GET", CONFIGURATION), ("GET", GRAPH_STORE)],
+    ids=["configuration", "shapes"],
+)
+@pytest.mark.parametrize(
+    ("status", "error_type"),
+    [
+        (401, AuthenticationError),
+        (403, TripleStoreAccessError),
+        (400, TripleStoreResponseError),
+        (500, TripleStoreResponseError),
+    ],
+)
+def test_shapes_get_raises_an_error_answer_of_each_request_with_its_type(
+    store, adapter, method, path, status, error_type
+):
+    store.answers[CONFIGURATION] = _configuration_answer(**WITH_SHACL)
+    store.answers[GRAPH_STORE] = answer(200, SHAPES, "text/turtle")
+    store.method_answers[(method, path)] = answer(status, BODY)
+
+    with pytest.raises(error_type) as failed:
+        adapter.shapes_get()
+
+    assert type(failed.value) is error_type
+    assert failed.value.status == status
+    assert f"'{DATASET}'" in str(failed.value)
+
+
+def test_shapes_get_without_an_answer_raises_unavailable(store, adapter):
+    store.unreachable = True
+
+    with pytest.raises(TripleStoreUnavailableError):
+        adapter.shapes_get()
+
+
 # -- the detection of SHACL validation, for each answer ----------------------------------------
 
 
@@ -385,26 +478,25 @@ class _StoreWithoutRegistries(TripleStore):
     """An adapter that inherits the contract and has neither registry."""
 
 
-REGISTRY_OPERATIONS = pytest.mark.parametrize(
-    "operation",
-    [
-        lambda db: db.prefixes_get(),
-        lambda db: db.prefix_set("ex", EX),
-        lambda db: db.prefix_delete("ex"),
-        lambda db: db.shapes_set(SHAPES, "text/turtle"),
-        lambda db: db.validate(SHAPES, "text/turtle"),
-    ],
-    ids=["prefixes_get", "prefix_set", "prefix_delete", "shapes_set", "validate"],
-)
+REGISTRY_OPERATIONS = {
+    "prefixes_get": lambda db: db.prefixes_get(),
+    "prefix_set": lambda db: db.prefix_set("ex", EX),
+    "prefix_delete": lambda db: db.prefix_delete("ex"),
+    "shapes_get": lambda db: db.shapes_get(),
+    "shapes_set": lambda db: db.shapes_set(SHAPES, "text/turtle"),
+    "validate": lambda db: db.validate(SHAPES, "text/turtle"),
+}
 
 
-@REGISTRY_OPERATIONS
-def test_an_adapter_without_the_registries_raises_not_supported(operation):
-    """Never a silent no-op: the contract's own operations raise."""
+@pytest.mark.parametrize("name", sorted(REGISTRY_OPERATIONS))
+def test_an_adapter_without_the_registries_raises_not_supported(name):
+    """Never a silent no-op: the contract's own operations raise, and the message names the
+    store and the operation."""
     with pytest.raises(TripleStoreNotSupportedError) as refused:
-        operation(_StoreWithoutRegistries())
+        REGISTRY_OPERATIONS[name](_StoreWithoutRegistries())
 
     assert "_StoreWithoutRegistries" in str(refused.value)
+    assert name in str(refused.value)
 
 
 # -- validate ----------------------------------------------------------------------------------

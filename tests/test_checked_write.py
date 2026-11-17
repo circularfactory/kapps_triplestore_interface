@@ -1,7 +1,7 @@
 """Unit tests of the checked write, with `query` stubbed.
 
 They assert on the requests a write sends: the update with its precondition and its receipt,
-the `ASK` for the receipt, and the removal of the receipt, which rides at the end of the
+the `ASK` for the receipt, and the removal of the receipt, which rides in the
 client's next checked write, or in `close()`. What the store does with them is tested live in
 `test_checked_write_live.py`.
 """
@@ -9,10 +9,11 @@ client's next checked write, or in `close()`. What the store does with them is t
 import logging
 import re
 import threading
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
-from rdflib import BNode, Literal, URIRef
+from rdflib import BNode, Dataset, Literal, URIRef, XSD
 from rdflib.plugins.sparql.parser import parseUpdate
 
 from kapps_triplestore_interface import (
@@ -31,8 +32,10 @@ from kapps_triplestore_interface.exceptions import (
 from kapps_triplestore_interface.queries.checked_write import (
     DEFAULT_GRAPH,
     RECEIPT_GRAPH,
+    RECEIPT_MAX_AGE,
     RECEIPT_PREDICATE,
     receipts_to_remove,
+    render_age_removal,
 )
 from kapps_triplestore_interface.utils import utils
 
@@ -81,6 +84,7 @@ def stub_db(store) -> GraphDB:
     db._blank_ids = set()
     db._sessions = []
     db._sessions_lock = threading.Lock()
+    db._sessions_generation = 0
     db.query = store
     return db
 
@@ -127,8 +131,9 @@ def graph(request):
 
 
 def _split(update: str) -> dict:
-    """The clauses of a rendered update, by keyword at the start of a line."""
+    """The clauses of the first operation of a request, by keyword at the start of a line."""
     clauses, current = {}, None
+    update = re.split(r" ;\n", update)[0]
     for line in update.splitlines():
         head = line.split(" ", 1)[0]
         if head in ("WITH", "DELETE", "INSERT", "USING", "WHERE"):
@@ -243,7 +248,11 @@ def test_check_exist_false_sends_one_request_without_receipt(
             OLD, new_obj=Literal(2), **kwargs
         ),
     }
-    assert calls[write]() is True
+    if write in ("triples_update", "triple_update"):
+        with pytest.warns(DeprecationWarning, match="unchecked update"):
+            assert calls[write]() is True
+    else:
+        assert calls[write]() is True
 
     assert len(store.requests) == 1
     text = store.requests[0][0]
@@ -260,9 +269,10 @@ def test_check_exist_false_sends_one_request_without_receipt(
 
 def test_unchecked_triples_update_keeps_its_query_text(stub_db, store):
     """`check_exist=False` sends the text that `triples_update` sent before the checked write."""
-    stub_db.triples_update(
-        [OLD], [(S, P, Literal(2))], check_exist=False, named_graph=GRAPH
-    )
+    with pytest.warns(DeprecationWarning, match="unchecked update"):
+        stub_db.triples_update(
+            [OLD], [(S, P, Literal(2))], check_exist=False, named_graph=GRAPH
+        )
 
     assert store.requests[0][0] == (
         f"WITH {GRAPH.n3()}\n"
@@ -354,7 +364,10 @@ def test_absent_subjects_check_also_without_check_exist(stub_db, store, write_):
     if write_ == "triples_add":
         stub_db.triples_add([OLD], check_exist=False, absent_subjects=[S2])
     else:
-        stub_db.triples_update([OLD], [], check_exist=False, absent_subjects=[S2])
+        with pytest.warns(DeprecationWarning, match="unchecked update"):
+            stub_db.triples_update(
+                [OLD], [], check_exist=False, absent_subjects=[S2]
+            )
 
     update = store.requests[0][0]
     assert RECEIPT_GRAPH.n3() in update
@@ -504,7 +517,8 @@ def test_update_k_starts_with_its_own_update_and_ends_with_the_removal_of_receip
         assert not operations[0].startswith("DELETE WHERE")
         assert REMOVAL.findall(operations[0]) == []
         # and the removal of the previous receipt last, as an operation of its own
-        assert operations[1:] == [
+        # (the last operation is the age removal)
+        assert operations[1:-1] == [
             f"DELETE WHERE {{ GRAPH {RECEIPT_GRAPH.n3()} {{ <{receipts[k - 1]}> ?p ?o }} }}"
         ]
     assert receipt_store.present == {receipts[-1]}
@@ -563,7 +577,7 @@ def test_a_false_precondition_raises_and_its_carried_removals_were_applied(
 def test_a_failed_ask_propagates_and_keeps_no_receipt_to_remove(
     receipt_db, receipt_store
 ):
-    """As on `main`: the `ASK` error propagates, and the receipt stays for a sweep."""
+    """As on `main`: the `ASK` error propagates, and the receipt stays, to be removed by its age."""
 
     def ask_fails(query, update=False, **kwargs):
         if update:
@@ -661,3 +675,126 @@ def test_a_failed_removal_in_close_warns_keeps_the_receipts_and_closes_the_sessi
         record.levelno == logging.WARNING and receipt in record.getMessage()
         for record in caplog.records
     )
+
+
+# --- present_triples (interim name) ----------------------------------------------------
+
+PRESENT = (S2, Q, Literal("queued"))
+
+
+def test_present_triples_join_the_where_and_are_not_written(stub_db, store, graph):
+    stub_db.triples_update(
+        [OLD], [(S, P, Literal(2))], present_triples=[PRESENT], named_graph=graph
+    )
+
+    update = store.requests[0][0]
+    parseUpdate(update)
+    clauses = _split(update)
+    where = clauses["WHERE"]
+    assert utils.triple_to_string(PRESENT, ".") in where
+    assert utils.triple_to_string(OLD, ".") in where
+    assert "queued" not in clauses.get("DELETE", "")
+    assert "queued" not in clauses["INSERT"]
+
+
+def test_present_triples_with_a_blank_node_share_its_variable(stub_db, store):
+    node = BNode("n")
+    stub_db.triples_update(
+        [(S, P, node)], [(S, P, Literal(2))], present_triples=[(node, Q, Literal(1))]
+    )
+
+    update = store.requests[0][0]
+    parseUpdate(update)
+    where = _split(update)["WHERE"]
+    assert "BIND(BNODE()" not in where
+    variables = set(re.findall(r"\?bn\d+", where))
+    assert len(variables) == 1
+
+
+def test_present_triples_check_also_without_check_exist(stub_db, store):
+    with pytest.warns(DeprecationWarning, match="unchecked update"):
+        stub_db.triples_update(
+            [], [OLD], check_exist=False, present_triples=[PRESENT]
+        )
+
+    update = store.requests[0][0]
+    assert RECEIPT_GRAPH.n3() in update
+    assert utils.triple_to_string(PRESENT, ".") in _split(update)["WHERE"]
+
+
+def test_present_triples_are_named_in_the_error_between_old_and_absent(
+    stub_db, store
+):
+    store.found = False
+    with pytest.raises(PreconditionFailedError) as refused:
+        stub_db.triples_update(
+            [OLD], [], present_triples=[PRESENT], absent_subjects=[S2], named_graph=GRAPH
+        )
+
+    assert refused.value.triples == [OLD, PRESENT, (S2, None, None)]
+
+
+# --- the age removal: every checked write also removes the receipts older than 10 minutes ---
+
+
+def _cutoff(operation: str) -> datetime:
+    literal = re.search(r'FILTER\(\?oldt < "([^"]+)"\^\^', operation).group(1)
+    return datetime.fromisoformat(literal)
+
+
+def test_the_request_ends_with_the_age_removal_also_when_nothing_is_carried(
+    stub_db, store, write, graph
+):
+    call, _ = WRITES[write]
+    before = datetime.now(timezone.utc)
+    call(stub_db, graph)
+    after = datetime.now(timezone.utc)
+
+    request = store.requests[0][0]
+    parseUpdate(request)
+    operations = _operations(request)
+    assert len(operations) == 2
+    assert RECEIPT_PREDICATE.n3() in operations[0]
+    assert f"GRAPH {RECEIPT_GRAPH.n3()}" in operations[1]
+    assert before - RECEIPT_MAX_AGE <= _cutoff(operations[1]) <= after - RECEIPT_MAX_AGE
+
+
+def test_the_age_removal_follows_the_carried_removals(receipt_db, receipt_store):
+    receipt_db.triple_delete(OLD)
+    receipt_db.triple_delete(OLD)
+    second = [t for t, u in receipt_store.requests if u][1]
+    operations = _operations(second)
+    assert len(operations) == 3
+    assert operations[1].startswith("DELETE WHERE")
+    assert operations[2].startswith("DELETE {")
+    parseUpdate(second)
+
+
+def test_a_false_precondition_still_carries_the_age_removal(receipt_db, receipt_store):
+    receipt_store.found = False
+    with pytest.raises(PreconditionFailedError):
+        receipt_db.triple_delete(OLD)
+    request = receipt_store.requests[0][0]
+    assert _operations(request)[-1].startswith("DELETE {")
+    assert [u for _, u in receipt_store.requests] == [True, False]
+
+
+def test_the_age_removal_on_a_dataset_removes_old_receipts_only():
+    now = datetime.now(timezone.utc)
+    other = URIRef("http://example.org/other")
+    dataset = Dataset()
+
+    def receipt(age_minutes, graph=RECEIPT_GRAPH):
+        node = URIRef(f"urn:uuid:{uuid4()}")
+        when = Literal(now - timedelta(minutes=age_minutes), datatype=XSD.dateTime)
+        dataset.add((node, RECEIPT_PREDICATE, when, graph))
+        return node
+
+    old, young = receipt(11), receipt(9)
+    outside_old = receipt(60, graph=other)
+
+    dataset.update(render_age_removal(now))
+
+    assert (old, None, None, RECEIPT_GRAPH) not in dataset
+    assert (young, None, None, RECEIPT_GRAPH) in dataset
+    assert (outside_old, None, None, other) in dataset

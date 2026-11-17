@@ -1,6 +1,7 @@
 # To be imported into ..graph_db.py GraphDB class
 
 from typing import Optional, TYPE_CHECKING
+from kapps_triplestore_interface import _deprecation
 from kapps_triplestore_interface.queries import checked_write
 from kapps_triplestore_interface.utils import utils
 from kapps_triplestore_interface.utils.iri import IRI
@@ -194,7 +195,9 @@ def triple_update(
         new_obj (Optional[ObjectLike]): Replacement object.
         check_exist (Optional[bool]): If True, the precondition is that `old_triple` exists.
             Defaults to True. If False, no receipt is written: the update still applies only
-            when `old_triple` matches its `WHERE`, and returns True either way.
+            when `old_triple` matches its `WHERE`, and returns True either way. Deprecated:
+            `check_exist=False` emits a `DeprecationWarning`, and interface 3.0.0 removes the
+            unchecked update, so that the update is always checked.
         named_graph (Optional[GraphNameLike]): Override the client's default named graph.
 
     Returns:
@@ -206,6 +209,9 @@ def triple_update(
         InvalidInputError: If neither or both of `new_triple` and any of `new_sub`/`new_pred`/`new_obj` are provided,
             or if input triples are incomplete/invalid.
     """
+    if not check_exist:
+        _deprecation.unchecked_update("triple_update")
+
     elems_given = new_sub is not None or new_pred is not None or new_obj is not None
     if (new_triple and elems_given) or (not new_triple and not elems_given):
         raise InvalidInputError(

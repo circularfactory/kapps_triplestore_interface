@@ -4,6 +4,10 @@ from rdflib import URIRef
 import rdflib.xsd_datetime
 from rdflib.term import XSDToPython, _XSD_PFX, _RDF_XMLLITERAL
 from kapps_triplestore_interface.utils.iri import IRI
+from kapps_triplestore_interface.utils.UncertaintyQuantification import (
+    UQ_DATATYPES,
+    UQ_PFX,
+)
 import xml.dom.minidom
 
 # Extends rdflib.term.XSDToPython
@@ -21,6 +25,7 @@ XSDToPythonMapper: Dict[IRI, Optional[Callable[[str], Any]]] = {
     URIRef(_XSD_PFX + "anyURI"): None,
     URIRef(_XSD_PFX + "decimal"): float,
     URIRef(_RDF_XMLLITERAL): str,
+    **{URIRef(UQ_PFX + name): kind.from_lexical for name, kind in UQ_DATATYPES.items()},
 }
 
 XSDToPythonTypes: Dict[IRI, type] = {
@@ -61,4 +66,5 @@ XSDToPythonTypes: Dict[IRI, type] = {
     # from XSDToPythonMapper, which converts a literal's lexical form and keeps it a string.
     IRI("anyURI", _XSD_PFX): IRI,
     _RDF_XMLLITERAL: xml.dom.minidom.Document,
+    **{IRI(name, UQ_PFX): kind for name, kind in UQ_DATATYPES.items()},
 }

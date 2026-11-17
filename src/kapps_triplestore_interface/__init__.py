@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any
 
 from .sparql_query import SPARQLQuery
 from .graph_db import GraphDB
+from .kadi import KadiPATAuth, KadiTripleStore, connect_kadi
 from .store import TripleStore, TripleStoreEndpoint
 from .auth import BasicAuth, GDBTokenAuth
 from .connection import connect
@@ -25,11 +26,14 @@ from .exceptions import (
 
 __all__ = [
     "connect",
+    "connect_kadi",
     "TripleStore",
     "TripleStoreEndpoint",
     "BasicAuth",
     "GDBTokenAuth",
+    "KadiPATAuth",
     "GraphDB",
+    "KadiTripleStore",
     "GraphDBCredentials",
     "IRI",
     "SPARQLQuery",

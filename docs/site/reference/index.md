@@ -16,6 +16,7 @@ Each is documented once, on the page of the module that defines it.
 connection
 store
 auth
+kadi
 exceptions
 graph_db
 sparql_query
@@ -41,6 +42,7 @@ utils/iri
 utils/pretty_print
 utils/processing
 utils/types
+utils/UncertaintyQuantification
 utils/utils
 utils/xsd_typemap
 ```

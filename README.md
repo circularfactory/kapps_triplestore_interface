@@ -45,12 +45,89 @@ it expires, and logs in again once when the store answers 401. The `GRAPHDB_*` v
 read as a deprecated fallback of the `TRIPLESTORE_*` ones; the API reference lists the
 providers and the variables.
 
+### Through Kadi
+
+A store behind the triple store API of a Kadi instance needs no credential of the store,
+only a personal access token from Kadi with the scope `triple_store.read`,
+`triple_store.write` or both. `connect_kadi()` takes it from the arguments or from the config
+file `~/.kadiconfig`, which only its owner should be able to read (`chmod 600 ~/.kadiconfig`):
+
+```ini
+[global]
+default = my_instance
+
+[my_instance]
+host = https://kadi.example.org
+pat = <your_personal_access_token>
+```
+
+```python
+from kapps_triplestore_interface import connect_kadi
+
+my_db = connect_kadi()                  # the default instance of ~/.kadiconfig
+my_db = connect_kadi(instance="kit")    # another instance of the file
+my_db = connect_kadi(host="https://kadi.example.org", pat="<your_personal_access_token>")
+```
+
+Kadi lets each request reach only the graphs that its ACL graph grants to the token's user and
+their Kadi groups, and it names the dataset itself. A token with only `triple_store.write`
+connects too: Kadi checks the store, so no read probe follows. A write by a token without
+`triple_store.write` fails as `AuthenticationError`, a request for a graph outside the user's
+grants as `TripleStoreAccessError`. Kadi exposes no prefix or shapes registry and no
+whole-dataset validation, so those operations raise `TripleStoreNotSupportedError`;
+`ruleset_get()` returns `None`.
+
+A checked write (`triples_add` with `check_exist=True` or `absent_subjects`,
+`triples_update` (also with `check_exist=False` when it has `absent_subjects` or
+`present_triples`), `triples_delete`, `triple_delete`) needs a named graph, since Kadi does not
+expose the default graph, and a token with both scopes. Its receipt graph
+`urn:x-kapps:write-receipts` needs Read and Write in Kadi's ACL graph: Append is not enough,
+because the next write removes the receipt of the last one.
+
 ## The store contract
 
 Code above this interface types its store as `TripleStore`, which `connect()` returns. It
 declares the operations that the layers above call on a store, and no other; its docstring lists them. The GraphDB adapter,
 `GraphDB`, implements each one. A test double satisfies the contract without inheriting from
 it.
+
+### Queries
+
+`query()` runs a SPARQL query, as text or built with `SPARQLQuery`, and what it returns depends
+on the query form:
+
+| Query form | `query()` returns |
+|---|---|
+| SELECT | the JSON result dict, `{"head": ..., "results": {"bindings": [...]}}` |
+| ASK | the JSON result dict with the answer, `{"head": {}, "boolean": ...}` |
+| CONSTRUCT, DESCRIBE | an rdflib `Graph` of the resulting triples |
+| an update (`update=True`) | `True` |
+
+A text query is sent as it is, without a parse on the client: a read offers the store the
+JSON result format and N-Triples, and the store answers in the one that fits the query form,
+also after a prologue of `BASE`, `PREFIX` and comments. Blank nodes come back as rdflib blank
+nodes. `convert_bindings` is ignored for a CONSTRUCT or DESCRIBE, which has no bindings.
+
+```python
+from kapps_triplestore_interface import SPARQLQuery
+
+graph = my_db.query(
+    "CONSTRUCT { ?s ?p ?o } WHERE { GRAPH <http://example.org/g> { ?s ?p ?o } }"
+    " ORDER BY ?s LIMIT 1000 OFFSET 2000"  # one page of an export
+)
+graph.serialize(format="turtle")
+
+built = SPARQLQuery.construct(
+    ["?s ?p ?o ."], ["?s ?p ?o ."], named_graph="http://example.org/g"
+)
+exported = my_db.query(built)
+described = my_db.query(SPARQLQuery.describe(["<http://example.org/s>"]))
+```
+
+`SPARQLQuery.construct` and `SPARQLQuery.describe` take `named_graph`, `include_explicit` and
+`include_implicit` as `SPARQLQuery.select` does. The builders do not page; a caller who pages
+an export writes LIMIT and OFFSET into a text query. Through Kadi, a read offers the JSON
+result format alone: whether Kadi answers a CONSTRUCT or DESCRIBE with RDF is not verified.
 
 ### The store's registries
 
@@ -62,6 +139,7 @@ each, so that no code above the interface calls a vendor's endpoint for them:
 | `prefixes_get()` | Each prefix of the dataset, with the namespace IRI that it stands for, as a `dict`. The empty prefix is the key `""`. |
 | `prefix_set(prefix, iri)` | Lets `prefix` stand for the namespace `iri`. A prefix that the dataset has already stands for `iri` afterwards. |
 | `prefix_delete(prefix)` | Removes `prefix`. Every other prefix stays. |
+| `shapes_get()` | The SHACL shapes that the store validates the dataset's writes against, as an rdflib `Graph`: the read of what `shapes_set` writes. A dataset without shapes gives an empty graph. On GraphDB it reads the one shapes graph that `shapes_set` writes; further shapes graphs of a repository are not read. |
 | `shapes_set(data, content_type)` | Replaces the SHACL shapes that the store validates the dataset against with the document `data`, of the media type `content_type`, for example `text/turtle`. An empty document removes every shape. |
 | `validate(shapes, content_type)` | Validates the whole dataset against the shapes document `shapes`, of the media type `content_type`, and returns the store's validation report verbatim (Turtle on GraphDB). It never changes the dataset or its shapes. A store without whole-dataset validation raises `TripleStoreNotSupportedError`. |
 
@@ -72,17 +150,43 @@ flag.
 is never a silent no-op. An adapter that inherits `TripleStore` and does not implement a
 registry raises it from the contract's own operations.
 
-**`shapes_set` on a dataset without SHACL validation raises `TripleStoreNotSupportedError`**,
-and writes nothing. GraphDB turns SHACL validation on only when a repository is created; on a
+**`shapes_set` and `shapes_get` on a dataset without SHACL validation raise
+`TripleStoreNotSupportedError`**; `shapes_set` writes nothing, and `shapes_get` reads only the
+configuration. GraphDB turns SHACL validation on only when a repository is created; on a
 repository without it, the shapes would be stored as plain data that validates nothing. The
 GraphDB adapter reads the repository's configuration to tell, and it refuses also when the
-configuration does not say. On a dataset with SHACL validation it replaces the shapes graph
+configuration does not say. On a dataset with SHACL validation `shapes_set` replaces the shapes graph
 with `data` in one request, which the store applies whole or not at all. If the store refuses
 it, because the data of the dataset violates the new shapes, `shapes_set` raises
 `ShaclValidationError`, and the old shapes stay.
 
 The library never calls `shapes_set` itself. It is for a seed, a test or an operator: a
 productive store already holds its shapes.
+
+### The dataset's reasoning ruleset
+
+`ruleset_get()` returns the reasoning ruleset that the dataset runs, as the store names it, for
+example `"rdfsplus-optimized"` or `"owl2-rl"` on GraphDB, where the adapter reads it from the
+repository's configuration. It returns `None` when the store does not say, and a store without
+named rulesets always does. It only reports: which rulesets a caller supports is the caller's
+rule.
+
+## Examples
+
+The package ships three runnable examples: connect and run a SELECT, an atomic update that
+replaces a property, and the identity of a blank node. A console command copies them, with the
+compose files that start a local GraphDB, into a directory that you own:
+
+```bash
+kapps-triplestore-examples my-examples
+cd my-examples/docker && docker compose up -d   # wait until `graphdb-init` has exited
+cd .. && python select_query.py
+```
+
+The name `kapps-triplestore-examples` is provisional and may change before the next release.
+
+The copied `README.md` lists all three. Each example clears the graph that it uses, so run them
+only against the repository that the compose file creates.
 
 ## What a write promises
 
@@ -93,10 +197,18 @@ five write functions that have a precondition send it inside the update itself:
 |---|---|
 | `triples_add` | None of the triples exists yet. Triples that share a blank node are one structure. |
 | `triples_delete`, `triple_delete` | All of the triples exist. |
-| `triples_update`, `triple_update` | All of the old triples exist. |
+| `triples_update`, `triple_update` | All of the old triples exist. `triples_update` also requires its `present_triples` (interim name, below). |
 
 `triples_add` and `triples_update` also take `absent_subjects`: IRIs that must not yet be the
 subject of a triple in the target graph. A subject that occurs only as an object passes.
+
+`triples_update` also takes `present_triples` (interim name): triples that must exist
+explicitly in the target graph when the update applies. They join the precondition beside the
+old triples and `absent_subjects`; they are neither removed nor added. A writer that read a
+value it does not change ("the status is `queued`") can require it that way. With
+`present_triples`, the write is checked also when `check_exist=False`. A false precondition
+raises `PreconditionFailedError`, whose `.triples` list the old triples, then the present
+triples, then `(subject, None, None)` per absent subject.
 
 - **A normal return means "applied".** The store found the precondition true and committed the
   change. The function returns `True`.
@@ -120,7 +232,9 @@ subject of a triple in the target graph. A subject that occurs only as an object
   cannot occur. An invariant that must hold under concurrent writers belongs in a SHACL shape:
   the store checks shapes at the commit.
 - **`check_exist=False`** sends the write without a precondition and returns `True`. An
-  unchecked update still applies only when its old triples match.
+  unchecked update still applies only when its old triples match. On `triples_update` and
+  `triple_update` it is deprecated: it emits a `DeprecationWarning`, and interface 3.0.0 always
+  checks the update. The unchecked add and delete operations stay.
 - **The receipt.** A checked write also writes one receipt triple into the graph
   `urn:x-kapps:write-receipts`, in the same update. The function then reads the receipt: a
   checked write sends two requests, the update and that read. When the read finds the receipt,
@@ -130,7 +244,20 @@ subject of a triple in the target graph. A subject that occurs only as an object
   the receipts that it carried stay to remove, and a later write removes them. `close()`
   removes the receipts still to remove, in one request, before it closes the connections. If
   that removal fails, `close()` logs a warning and closes the connections all the same. If the
-  process stops before a later write or `close()`, the receipt stays, with its time.
+  process stops before a later write or `close()`, the receipt stays, with its time, and the
+  first checked write of any client after it is 10 minutes old removes it: every checked write
+  also removes the receipts older than 10 minutes, as one more operation of the same update
+  request, without an extra request.
+
+  The receipt is the interface's bookkeeping, not information of the dataset. It is one
+  triple: the receipt IRI `urn:uuid:…` as subject, the predicate `urn:x-kapps:appliedAt`, and
+  the time of the write as an `xsd:dateTime`, in the graph `urn:x-kapps:write-receipts`. The
+  graph uses no ontology term, and no ontology defines its predicate, on purpose: a library
+  must not depend on an ontology deployment. So leave this graph out of the shapes and of the
+  vocabulary checks of your dataset; a reader that lists all graphs sees it and may ignore it.
+  A receipt that a stopped process left behind keeps its time, and the interface's own checked
+  write removes it once it is 10 minutes old: no sweep by the operator of the dataset is
+  needed.
 - **A write that gets no answer** (for example a timeout, or a connection that the store
   closed) raises `TripleStoreUnavailableError`, chained to the error of the HTTP client. The
   write is not sent again, and its receipt is not read: the store can still commit the write

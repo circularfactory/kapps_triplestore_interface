@@ -121,7 +121,7 @@ def test_no_blank_nodes_is_unchanged(stub_db: GraphDB):
         old_triples=[(SUB, VALUE, Literal(12.1))],
         new_triples=[(SUB, VALUE, Literal(1.4))],
     )
-    query = stub_db.queries[0]
+    query = stub_db.queries[0].split(" ;\n")[0]  # the write itself; the age removal follows
 
     assert "?" not in query
     assert "BIND(BNODE()" not in query

@@ -401,9 +401,10 @@ def test_an_unchecked_delete_without_a_graph_removes_every_copy(store):
 
 
 def test_an_unchecked_update_applies_only_on_a_match(store, graph):
-    assert store.triples_update(
-        [(A, R, O)], [(A, R, NEW)], check_exist=False, named_graph=graph
-    )
+    with pytest.warns(DeprecationWarning, match="unchecked update"):
+        assert store.triples_update(
+            [(A, R, O)], [(A, R, NEW)], check_exist=False, named_graph=graph
+        )
     assert not _has(store, (A, R, NEW), graph)
     assert _settled_receipts(store) == 0
 
@@ -487,3 +488,72 @@ def test_n_writes_and_close_leave_the_receipt_graph_empty(store, graph):
     store.close()
     assert _receipts(store) == 0
     assert len(receipts_to_remove(store)) == 0
+
+
+# --- present_triples (interim name) ----------------------------------------------------
+
+
+def test_a_present_triple_that_holds_applies_and_stays(store, graph):
+    _seed(store, [(A, R, Literal(1)), (B, R, Literal("queued"))], graph)
+    assert store.triples_update(
+        [(A, R, Literal(1))],
+        [(A, R, Literal(2))],
+        present_triples=[(B, R, Literal("queued"))],
+        named_graph=graph,
+    )
+    assert _has(store, (A, R, Literal(2)), graph)
+    assert _has(store, (B, R, Literal("queued")), graph)
+    assert _settled_receipts(store) == 0
+
+
+def test_a_missing_present_triple_refuses_and_writes_nothing(store, graph):
+    _seed(store, [(A, R, Literal(1)), (B, R, Literal("done"))], graph)
+    present = [(B, R, Literal("queued"))]
+    _refused(
+        store,
+        graph,
+        lambda: store.triples_update(
+            [(A, R, Literal(1))],
+            [(A, R, Literal(2))],
+            present_triples=present,
+            named_graph=graph,
+        ),
+        [(A, R, Literal(1))] + present,
+    )
+    assert _has(store, (A, R, Literal(1)), graph)
+    assert not _has(store, (A, R, Literal(2)), graph)
+
+
+def test_an_inferred_only_present_triple_refuses(store, graph):
+    _seed(store, [(A, P1, O)], graph)
+    assert _visible(store, (A, Q, O))
+    _refused(
+        store,
+        graph,
+        lambda: store.triples_update(
+            [], [(B, R, O)], present_triples=[(A, Q, O)], named_graph=graph
+        ),
+        [(A, Q, O)],
+    )
+
+
+def test_a_present_triple_in_another_graph_does_not_count(store):
+    _seed(store, [(B, R, O)], None)
+    _refused(
+        store,
+        GRAPH,
+        lambda: store.triples_update(
+            [], [(A, R, O)], present_triples=[(B, R, O)], named_graph=GRAPH
+        ),
+        [(B, R, O)],
+    )
+
+
+def test_a_present_triple_only_in_a_named_graph_does_not_count_for_the_default(store):
+    _seed(store, [(B, R, O)], GRAPH)
+    _refused(
+        store,
+        None,
+        lambda: store.triples_update([], [(A, R, O)], present_triples=[(B, R, O)]),
+        [(B, R, O)],
+    )

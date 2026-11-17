@@ -6,17 +6,22 @@ An operation that no layer above calls is not in the contract, even when the Gra
 adapter has it. The contract declares each operation under its new name: `graph_get`,
 `graph_add`, `graph_clear` and `dataset`.
 
-The store registries are declared too: four operations give a caller a dataset's prefixes and
-its SHACL shapes without reaching past the interface.
+The store registries are declared too: their operations give a caller a dataset's prefixes, its
+SHACL shapes and the validation of the dataset against a shapes document, without reaching past
+the interface. So is the one report of the dataset's configuration, `ruleset_get`.
 """
 
 from __future__ import annotations
 
 import inspect
+import typing
+from typing import Dict
 
 import pytest
 
-from kapps_triplestore_interface import GraphDB, TripleStore
+from rdflib import Graph
+
+from kapps_triplestore_interface import GraphDB, KadiTripleStore, TripleStore
 
 MEASURED = {
     "query",
@@ -39,9 +44,21 @@ MEASURED = {
 }
 
 # The store registries: the operations that replace those callers' calls past the interface.
-REGISTRIES = {"prefixes_get", "prefix_set", "prefix_delete", "shapes_set", "validate"}
+REGISTRIES = {
+    "prefixes_get",
+    "prefix_set",
+    "prefix_delete",
+    "shapes_get",
+    "shapes_set",
+    "validate",
+}
 
-OPERATIONS = sorted((MEASURED | REGISTRIES) - {"dataset"})
+# What the store says about the dataset's configuration.
+REPORTS = {"ruleset_get"}
+
+CONTRACT = MEASURED | REGISTRIES | REPORTS
+
+OPERATIONS = sorted(CONTRACT - {"dataset"})
 
 
 def _declared(contract: type) -> set[str]:
@@ -55,8 +72,8 @@ def _parameters(function) -> list[tuple[str, object, object]]:
     ]
 
 
-def test_the_contract_declares_exactly_the_measured_operations_and_the_registries():
-    assert _declared(TripleStore) == MEASURED | REGISTRIES
+def test_the_contract_declares_exactly_the_measured_operations_registries_and_reports():
+    assert _declared(TripleStore) == CONTRACT
 
 
 @pytest.mark.parametrize("name", OPERATIONS)
@@ -78,3 +95,11 @@ def test_the_adapter_satisfies_the_contract_without_inheriting_it():
     does not know."""
     assert TripleStore not in GraphDB.__mro__
     assert getattr(TripleStore, "_is_protocol", False)
+
+
+@pytest.mark.parametrize("store", [TripleStore, GraphDB, KadiTripleStore])
+def test_a_query_returns_a_dict_a_bool_or_a_graph(store):
+    """A SELECT or ASK answers a dict, an update `True`, a CONSTRUCT or DESCRIBE a graph."""
+    returned = typing.get_type_hints(store.query)["return"]
+
+    assert set(typing.get_args(returned)) == {Dict, bool, Graph}

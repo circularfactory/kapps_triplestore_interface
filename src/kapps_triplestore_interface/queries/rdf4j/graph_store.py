@@ -57,15 +57,8 @@ def graph_get(
     )
 
     if response.status_code != 200:
-        # `query()`'s mapping of an error answer to a type. Imported here, not at the top:
-        # `graph_db` imports this module while it defines `GraphDB`.
-        from kapps_triplestore_interface.graph_db import (  # pylint: disable=import-outside-toplevel
-            _raise_error_answer,
-        )
-
         target = f"graph <{graph_iri_str}>" if graph_iri else "the default graph"
-        _raise_error_answer(
-            self.logger,
+        self._raise_error(
             response,
             f"Failed to fetch {target} in repository '{self._repository}'",
         )
@@ -135,15 +128,8 @@ def graph_add(
     )
 
     if response.status_code != 204:
-        # `query()`'s mapping of an error answer to a type. Imported here, not at the top:
-        # `graph_db` imports this module while it defines `GraphDB`.
-        from kapps_triplestore_interface.graph_db import (  # pylint: disable=import-outside-toplevel
-            _raise_error_answer,
-        )
-
         target = f"graph <{graph_iri_str}>" if graph_iri_str else "the default graph"
-        _raise_error_answer(
-            self.logger,
+        self._raise_error(
             response,
             f"Failed to import into {target} in repository '{self._repository}'",
         )
@@ -201,15 +187,8 @@ def graph_clear(
     )
 
     if response.status_code != 204:
-        # `query()`'s mapping of an error answer to a type. Imported here, not at the top:
-        # `graph_db` imports this module while it defines `GraphDB`.
-        from kapps_triplestore_interface.graph_db import (  # pylint: disable=import-outside-toplevel
-            _raise_error_answer,
-        )
-
         target = f"graph <{graph_iri_str}>" if graph_iri_str else "the default graph"
-        _raise_error_answer(
-            self.logger,
+        self._raise_error(
             response,
             f"Failed to clear {target} in repository '{self._repository}'",
         )

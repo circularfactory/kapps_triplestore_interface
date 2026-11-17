@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kapps-triplestore-interface"
-version = "2.3.0"
+version = "2.4.0"
 description = "SPARQL queries and atomic updates against a GraphDB triplestore, as callable Python methods."
 readme = "README.md"
 requires-python = ">=3.12,<4.0"
@@ -45,6 +45,13 @@ dependencies = [
     # this is the range that `requests` admits, so nothing resolves differently.
     "urllib3>=1.21.1,<3",
 ]
+
+[project.scripts]
+# Copies the runnable examples, and the compose files that start the GraphDB they need, out of
+# the installed package into a directory the user chooses, because a file inside site-packages
+# cannot be opened, edited or re-run. The examples live in the package, so the wheel carries
+# them without a mapping.
+kapps-triplestore-examples = "kapps_triplestore_interface.examples_cli:main"
 
 [project.urls]
 # Distribution names use hyphens, repository names use underscores. PyPI normalises the one and
